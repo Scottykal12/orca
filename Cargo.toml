@@ -4,3 +4,25 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+clap = { version = "4.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.2", features = ["v4"] }
+mac_address = "1.1.2"
+local-ip-address = "0.6.5"
+hostname = "0.4.1"
+sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "mysql", "macros"] }
+tokio = { version = "1", features = ["full"] }
+
+[[bin]]
+name = "orca-dispatch"
+path = "src/bin/dispatch.rs"
+
+[[bin]]
+name = "orca-client"
+path = "src/bin/client.rs"
+
+[[bin]]
+name = "orca-registration"
+path = "src/bin/registration.rs"
+

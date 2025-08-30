@@ -1,0 +1,5 @@
+{
+  "database_url": "mysql://root:password@localhost:3306/orca",
+  "listen_address": "127.0.0.1:8081",
+  "create_db_if_not_exists": true
+}
