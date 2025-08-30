@@ -118,7 +118,7 @@ fn main() {
     let log_level = LevelFilter::from_str(&config.log_level).unwrap_or(LevelFilter::Info);
 
     let file_appender = FileAppender::builder()
-        .encoder(Box::new(PatternEncoder::new("{m}\n")))
+        .encoder(Box::new(PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S)} {l} - {m}\n")))
         .build(&config.log_file_path)
         .expect("Failed to build file appender");
 
