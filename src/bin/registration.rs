@@ -66,11 +66,30 @@ async fn handle_client(mut stream: TcpStream, pool: MySqlPool) -> Result<(), Box
                     .await;
 
                     match client_exists {
-                        Ok(Some(_)) => {
-                            // Client with this UUID already exists. Tell client to get a new UUID.
-                            println!("Client with UUID {} already exists. Instructing client to get a new UUID.", client_info.uuid);
-                            let response = "UUID_IN_USE";
-                            stream.write_all(response.as_bytes()).await?;
+                        Ok(Some(existing_client)) => {
+                            if existing_client.mac_address == client_info.mac_address {
+                                // Same client, update IP and hostname
+                                println!("Client with UUID {} found. Updating IP and hostname.", client_info.uuid);
+                                sqlx::query(
+                                    "UPDATE clients SET ip = ?, hostname = ? WHERE uuid = ?"
+                                )
+                                .bind(&client_info.ip)
+                                .bind(&client_info.hostname)
+                                .bind(&client_info.uuid)
+                                .execute(&pool)
+                                .await
+                                .map_err(|e| {
+                                    eprintln!("Error updating client: {:?}", e);
+                                    e
+                                })?;
+                                let response = format!("Client updated successfully. UUID: {}", client_info.uuid);
+                                stream.write_all(response.as_bytes()).await?;
+                            } else {
+                                // Different client trying to use existing UUID
+                                println!("Client with UUID {} already exists but MAC address does not match. Instructing client to get a new UUID.", client_info.uuid);
+                                let response = "UUID_IN_USE";
+                                stream.write_all(response.as_bytes()).await?;
+                            }
                         }
                         Ok(None) => {
                             // Client does not exist, insert

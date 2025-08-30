@@ -87,8 +87,8 @@ fn register_client(config: &ClientConfig) {
     let response_str = String::from_utf8_lossy(&buffer[..bytes_read]).to_string();
 
     // Parse the response from the registration server.
-    let received_uuid = if response_str.starts_with("Client registered successfully. UUID: ") {
-        response_str.trim_start_matches("Client registered successfully. UUID: ").to_string()
+    let received_uuid = if response_str.starts_with("Client registered successfully. UUID: ") || response_str.starts_with("Client updated successfully. UUID: ") {
+        response_str.trim_start_matches("Client registered successfully. UUID: ").trim_start_matches("Client updated successfully. UUID: ").to_string()
     } else if response_str == "UUID_IN_USE" {
         warn!("UUID is already in use. Deleting client.uuid and retrying registration.");
         fs::remove_file("client.uuid").expect("Failed to delete client.uuid");
