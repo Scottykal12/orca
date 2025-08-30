@@ -1,4 +1,6 @@
 {
   "registration_server": "127.0.0.1:8081",
-  "listen_port": 8080
+  "listen_port": 8080,
+  "log_file_path": "client.log",
+  "log_level": "info"
 }

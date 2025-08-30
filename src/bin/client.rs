@@ -9,6 +9,9 @@ use orca::{ClientInfo, ClientConfig};
 use mac_address::get_mac_address;
 use local_ip_address::local_ip;
 use hostname;
+use log::{info, warn, error, LevelFilter};
+use log4rs::{append::{console::{ConsoleAppender, Target}, file::FileAppender}, config::{Appender, Config, Root}, encode::pattern::PatternEncoder};
+use std::str::FromStr;
 
 // This function executes the command in a cross-platform way.
 #[cfg(windows)]
@@ -36,7 +39,7 @@ fn handle_dispatch(mut stream: TcpStream) {
         // If data is successfully read, execute the command.
         Ok(bytes_read) => {
             let command_str = String::from_utf8_lossy(&buffer[..bytes_read]);
-            println!("Received command: {}", command_str);
+            info!("Received command: {}", command_str);
 
             // WARNING: Executing arbitrary commands received over the network is a huge security risk.
             // In a real application, you must validate and sanitize the command.
@@ -48,13 +51,13 @@ fn handle_dispatch(mut stream: TcpStream) {
         }
         // If there is an error reading from the server, print the error.
         Err(e) => {
-            println!("Failed to read from dispatch server: {}", e);
+            error!("Failed to read from dispatch server: {}", e);
         }
     }
 }
 
 fn register_client(config: &ClientConfig) {
-    println!("Checking in with registration server...");
+    info!("Checking in with registration server...");
 
     // Get client information.
     let hostname = hostname::get().unwrap().into_string().unwrap();
@@ -87,7 +90,7 @@ fn register_client(config: &ClientConfig) {
     let received_uuid = if response_str.starts_with("Client registered successfully. UUID: ") {
         response_str.trim_start_matches("Client registered successfully. UUID: ").to_string()
     } else if response_str == "UUID_IN_USE" {
-        eprintln!("UUID is already in use. Deleting client.uuid and retrying registration.");
+        warn!("UUID is already in use. Deleting client.uuid and retrying registration.");
         fs::remove_file("client.uuid").expect("Failed to delete client.uuid");
         // Recursively call register_client to get a new UUID
         register_client(config);
@@ -95,14 +98,14 @@ fn register_client(config: &ClientConfig) {
     }
     else {
         // Handle unexpected response, maybe log an error or use a default
-        eprintln!("Unexpected response from registration server: {}", response_str);
+        error!("Unexpected response from registration server: {}", response_str);
         "UNKNOWN_UUID".to_string() // Or handle as an error
     };
 
     // Save the received UUID.
     fs::write("client.uuid", &received_uuid).expect("Failed to write client.uuid");
 
-    println!("Client registered/checked in with UUID: {}", received_uuid);
+    info!("Client registered/checked in with UUID: {}", received_uuid);
 }
 
 
@@ -111,6 +114,29 @@ fn main() {
     let config_str = fs::read_to_string("client.json").expect("Failed to read client.json");
     let config: ClientConfig = serde_json::from_str(&config_str).expect("Failed to parse client.json");
 
+    // Initialize logger
+    let log_level = LevelFilter::from_str(&config.log_level).unwrap_or(LevelFilter::Info);
+
+    let file_appender = FileAppender::builder()
+        .encoder(Box::new(PatternEncoder::new("{m}\n")))
+        .build(&config.log_file_path)
+        .expect("Failed to build file appender");
+
+    let stdout_appender = ConsoleAppender::builder().target(Target::Stdout).build();
+
+    let log_config = Config::builder()
+        .appender(Appender::builder().build("file", Box::new(file_appender)))
+        .appender(Appender::builder().build("stdout", Box::new(stdout_appender)))
+        .build(
+            Root::builder()
+                .appender("file")
+                .appender("stdout")
+                .build(log_level),
+        )
+        .expect("Failed to build log4rs config");
+
+    log4rs::init_config(log_config).expect("Failed to initialize log4rs");
+
     // Register the client if it's not already registered.
     register_client(&config);
 
@@ -118,7 +144,7 @@ fn main() {
     let listen_address = format!("0.0.0.0:{}", config.listen_port);
     let listener = TcpListener::bind(&listen_address).unwrap();
     // Print a message to indicate that the client is running.
-    println!("orca-client listening on {}", listen_address);
+    info!("orca-client listening on {}", listen_address);
 
     // Iterate over incoming connections.
     for stream in listener.incoming() {
@@ -129,7 +155,7 @@ fn main() {
             }
             // If there is an error, print the error message.
             Err(e) => {
-                println!("Error: {}", e);
+                error!("Error: {}", e);
             }
         }
     }

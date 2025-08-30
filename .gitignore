@@ -1,3 +1,4 @@
 /target
 .sqlx/
 client.uuid
+client.log

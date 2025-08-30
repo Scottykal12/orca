@@ -15,6 +15,8 @@ pub struct ClientInfo {
 pub struct ClientConfig {
     pub registration_server: String,
     pub listen_port: u16,
+    pub log_file_path: String,
+    pub log_level: String,
 }
 
 // Configuration for the dispatch server.
