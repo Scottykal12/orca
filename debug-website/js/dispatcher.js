@@ -6,6 +6,7 @@ document.getElementById('dispatch-form').addEventListener('submit', async functi
     const formData = new FormData(form);
     const command = formData.get('command');
     const client = formData.get('client');
+    const files = formData.get('files');
 
     const responseContainer = document.getElementById('response-container');
     const successEl = document.getElementById('success');
@@ -21,7 +22,7 @@ document.getElementById('dispatch-form').addEventListener('submit', async functi
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ command, client })
+            body: JSON.stringify({ command, client, files })
         });
 
         if (!response.ok) {

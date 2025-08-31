@@ -9,6 +9,7 @@ use orca::ApiConfig;
 struct DispatchRequest {
     command: String,
     client: String,
+    files: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -31,6 +32,10 @@ async fn dispatch_command(req: web::Json<DispatchRequest>, app_data: web::Data<A
         .arg(&req.command)
         .arg("-i")
         .arg(&req.client);
+
+    if let Some(files) = &req.files {
+        cmd.arg("--files").arg(files.clone());
+    }
 
     let output = cmd.output().expect("Failed to execute orca-dispatch");
 
