@@ -1,10 +1,13 @@
 // This binary is the client for the orca project.
 // It first registers with the registration server, then listens for commands from the dispatch server.
 
+use std::env;
 use std::fs;
 use std::net::{TcpListener, TcpStream};
 use std::io::{Read, Write};
 use std::process::{Command, Output};
+use std::path::PathBuf;
+use home::home_dir;
 use orca::{ClientInfo, ClientConfig};
 use mac_address::get_mac_address;
 use local_ip_address::local_ip;
@@ -14,24 +17,34 @@ use log4rs::{append::{console::{ConsoleAppender, Target}, file::FileAppender}, c
 use std::str::FromStr;
 
 // This function executes the command in a cross-platform way.
-#[cfg(windows)]
-fn execute_command(command_str: &str) -> std::io::Result<Output> {
-    Command::new("cmd")
-        .arg("/C")
-        .arg(command_str)
-        .output()
-}
+fn execute_command(command_str: &str, config: &ClientConfig) -> std::io::Result<Output> {
+    let workspace_dir = match &config.workspace_dir {
+        Some(dir) => PathBuf::from(dir),
+        None => {
+            let mut path = env::current_exe()?;
+            path.pop();
+            path.push("orca-workspace");
+            path
+        }
+    };
 
-#[cfg(not(windows))]
-fn execute_command(command_str: &str) -> std::io::Result<Output> {
-    Command::new("sh")
-        .arg("-c")
-        .arg(command_str)
-        .output()
+    fs::create_dir_all(&workspace_dir)?;
+
+    let mut cmd = if cfg!(windows) {
+        let mut c = Command::new("cmd");
+        c.arg("/C").arg(command_str);
+        c
+    } else {
+        let mut c = Command::new("sh");
+        c.arg("-c").arg(command_str);
+        c
+    };
+
+    cmd.current_dir(workspace_dir).output()
 }
 
 // This function handles a single dispatch server connection.
-fn handle_dispatch(mut stream: TcpStream) {
+fn handle_dispatch(mut stream: TcpStream, config: ClientConfig) {
     // Create a buffer to store the received data.
     let mut buffer = [0; 1024];
     // Read data from the stream into the buffer.
@@ -43,7 +56,7 @@ fn handle_dispatch(mut stream: TcpStream) {
 
             // WARNING: Executing arbitrary commands received over the network is a huge security risk.
             // In a real application, you must validate and sanitize the command.
-            let output = execute_command(&command_str).expect("failed to execute process");
+            let output = execute_command(&command_str, &config).expect("failed to execute process");
 
             // Send the output back to the dispatch server.
             stream.write_all(&output.stdout).unwrap();
@@ -148,10 +161,11 @@ fn main() {
 
     // Iterate over incoming connections.
     for stream in listener.incoming() {
+        let config_clone = config.clone();
         match stream {
             // If the connection is successful, handle the dispatch server.
             Ok(stream) => {
-                handle_dispatch(stream);
+                handle_dispatch(stream, config_clone);
             }
             // If there is an error, print the error message.
             Err(e) => {

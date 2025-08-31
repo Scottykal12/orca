@@ -1,0 +1,93 @@
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background-color: #1a1a1a;
+    color: #f0f0f0;
+    margin: 0;
+    padding: 2rem;
+}
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+}
+.header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 2rem;
+    background-color: #2b2b2b;
+}
+.header h1 {
+    margin: 0;
+    font-size: 1.5rem;
+}
+.header .logo {
+    height: 40px;
+    width: auto;
+}
+.home-button {
+    display: inline-block;
+    padding: 0.5rem 1rem;
+    border: 1px solid #444;
+    border-radius: 5px;
+    background-color: #333;
+    color: #f0f0f0;
+    text-decoration: none;
+    transition: background-color 0.3s;
+}
+.home-button:hover {
+    background-color: #444;
+}
+h1 {
+    text-align: center;
+    color: #00aaff;
+}
+.form-group {
+    margin-bottom: 1.5rem;
+}
+label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-weight: bold;
+}
+input[type="text"] {
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid #444;
+    border-radius: 5px;
+    background-color: #333;
+    color: #f0f0f0;
+    box-sizing: border-box;
+}
+button {
+    display: block;
+    width: 100%;
+    padding: 0.75rem;
+    border: none;
+    border-radius: 5px;
+    background-color: #007acc;
+    color: white;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+button:hover {
+    background-color: #005fa3;
+}
+.response {
+    margin-top: 2rem;
+    background-color: #2b2b2b;
+    padding: 1.5rem;
+    border-radius: 5px;
+}
+pre {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    background-color: #1e1e1e;
+    padding: 1rem;
+    border-radius: 5px;
+}
+.stdout { color: #a7d7a7; }
+.stderr { color: #f9a9a9; }
+.success-true { color: #a7d7a7; }
+.success-false { color: #f9a9a9; }

@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (socket, _) = listener.accept().await?;
         let pool = pool.clone(); // Clone the pool for each task
         tokio::spawn(async move {
-            handle_client(socket, pool).await;
+            let _ = handle_client(socket, pool).await;
         });
     }
 }

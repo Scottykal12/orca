@@ -1,0 +1,4 @@
+{
+  "listen_address": "127.0.0.1:8082",
+  "dispatch_binary_path": "c:\\Users\\scott\\Projects\\orca\\target\\debug\\orca-dispatch.exe"
+}

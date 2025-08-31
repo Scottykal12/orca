@@ -11,12 +11,13 @@ pub struct ClientInfo {
 }
 
 // Configuration for the client.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ClientConfig {
     pub registration_server: String,
     pub listen_port: u16,
     pub log_file_path: String,
     pub log_level: String,
+    pub workspace_dir: Option<String>,
 }
 
 // Configuration for the dispatch server.
@@ -27,9 +28,15 @@ pub struct DispatchConfig {
 }
 
 // Configuration for the registration server.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RegistrationConfig {
     pub database_url: String,
     pub listen_address: String,
-    pub create_db_if_not_exists: bool,
+}
+
+// Configuration for the API server.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ApiConfig {
+    pub listen_address: String,
+    pub dispatch_binary_path: Option<String>,
 }
