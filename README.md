@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../images/logo.svg" alt="Orca Logo" width="150"/>
+  <img src="./images/logo.svg" alt="Orca Logo" width="150"/>
 </p>
 
 # Orca Project Documentation
