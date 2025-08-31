@@ -34,9 +34,29 @@ pub struct RegistrationConfig {
     pub listen_address: String,
 }
 
+
 // Configuration for the API server.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ApiConfig {
     pub listen_address: String,
     pub dispatch_binary_path: Option<String>,
+}
+
+// Message sent from dispatch to client.
+#[derive(Serialize, Deserialize, Debug)]
+pub struct DispatchMessage {
+    pub command: String,
+    pub files: Vec<DispatchFile>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct DispatchFile {
+    pub name: String,
+    pub content: Vec<u8>,
+}
+
+// Metadata for files, used for logging in the database
+#[derive(Serialize, Deserialize, Debug)]
+pub struct DispatchFileMetadata {
+    pub name: String,
 }

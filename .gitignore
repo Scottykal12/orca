@@ -2,3 +2,4 @@
 .sqlx/
 client.uuid
 client.log
+workspace

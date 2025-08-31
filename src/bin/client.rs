@@ -4,17 +4,17 @@
 use std::env;
 use std::fs;
 use std::net::{TcpListener, TcpStream};
-use std::io::{Read, Write};
+use std::io::{Read, Write, BufRead};
 use std::process::{Command, Output};
 use std::path::PathBuf;
-use home::home_dir;
-use orca::{ClientInfo, ClientConfig};
+use orca::{ClientInfo, ClientConfig, DispatchMessage, DispatchFile};
 use mac_address::get_mac_address;
 use local_ip_address::local_ip;
 use hostname;
 use log::{info, warn, error, LevelFilter};
 use log4rs::{append::{console::{ConsoleAppender, Target}, file::FileAppender}, config::{Appender, Config, Root}, encode::pattern::PatternEncoder};
 use std::str::FromStr;
+use serde_json;
 
 // This function executes the command in a cross-platform way.
 fn execute_command(command_str: &str, config: &ClientConfig) -> std::io::Result<Output> {
@@ -45,24 +45,64 @@ fn execute_command(command_str: &str, config: &ClientConfig) -> std::io::Result<
 
 // This function handles a single dispatch server connection.
 fn handle_dispatch(mut stream: TcpStream, config: ClientConfig) {
-    // Create a buffer to store the received data.
-    let mut buffer = [0; 1024];
-    // Read data from the stream into the buffer.
-    match stream.read(&mut buffer) {
-        // If data is successfully read, execute the command.
-        Ok(bytes_read) => {
-            let command_str = String::from_utf8_lossy(&buffer[..bytes_read]);
-            info!("Received command: {}", command_str);
+    // Read the incoming message until a newline delimiter.
+    let mut buffer = Vec::new();
+    let mut reader = std::io::BufReader::new(&mut stream);
+    match reader.read_until(b'\n', &mut buffer) {
+        Ok(bytes_read) if bytes_read > 0 => {
+            let message_str = String::from_utf8_lossy(&buffer[..bytes_read]);
+            match serde_json::from_str::<DispatchMessage>(&message_str) {
+                Ok(dispatch_message) => {
+                    info!("Received command: {}", dispatch_message.command);
 
-            // WARNING: Executing arbitrary commands received over the network is a huge security risk.
-            // In a real application, you must validate and sanitize the command.
-            let output = execute_command(&command_str, &config).expect("failed to execute process");
+                    // Determine the workspace directory
+                    let workspace_dir = match &config.workspace_dir {
+                        Some(dir) => PathBuf::from(dir),
+                        None => {
+                            let mut path = env::current_exe().unwrap();
+                            path.pop();
+                            path.push("orca-workspace");
+                            path
+                        }
+                    };
 
-            // Send the output back to the dispatch server.
-            stream.write_all(&output.stdout).unwrap();
-            stream.write_all(&output.stderr).unwrap();
+                    // Create the workspace directory if it doesn't exist
+                    if let Err(e) = fs::create_dir_all(&workspace_dir) {
+                        error!("Failed to create workspace directory {}: {}", workspace_dir.display(), e);
+                        return;
+                    }
+
+                    // Save files to the workspace directory
+                    for file in dispatch_message.files {
+                        let file_path = workspace_dir.join(&file.name);
+                        match fs::write(&file_path, &file.content) {
+                            Ok(_) => info!("Saved file: {}", file_path.display()),
+                            Err(e) => error!("Failed to save file {}: {}", file_path.display(), e),
+                        }
+                    }
+
+                    // Execute the command
+                    let output = execute_command(&dispatch_message.command, &config).expect("failed to execute process");
+
+                    // Send the output back to the dispatch server.
+                    stream.write_all(&output.stdout).unwrap();
+                    stream.write_all(&output.stderr).unwrap();
+
+                    // Clean up the workspace directory
+                    if let Err(e) = fs::remove_dir_all(&workspace_dir) {
+                        error!("Failed to remove workspace directory {}: {}", workspace_dir.display(), e);
+                    } else {
+                        info!("Cleaned up workspace directory: {}", workspace_dir.display());
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to deserialize dispatch message: {}", e);
+                }
+            }
         }
-        // If there is an error reading from the server, print the error.
+        Ok(_) => {
+            error!("Received empty message from dispatch server.");
+        }
         Err(e) => {
             error!("Failed to read from dispatch server: {}", e);
         }

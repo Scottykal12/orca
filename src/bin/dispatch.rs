@@ -5,10 +5,12 @@ use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 use clap::Parser;
 use sqlx::{MySqlPool, FromRow};
-use orca::DispatchConfig;
+use orca::{DispatchConfig, DispatchMessage, DispatchFile, DispatchFileMetadata};
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream as TokioTcpStream;
+use std::path::Path;
+use std::io::prelude::*;
 
 // Added a comment to force re-compilation and re-preparation of SQLx queries.
 
@@ -23,6 +25,10 @@ struct Args {
     /// The client to send the command to (uuid, ip, hostname, or mac_address).
     #[arg(short = 'i', long)]
     client: String,
+
+    /// Comma-separated list of files to send to the client.
+    #[arg(short, long)]
+    files: Option<String>,
 }
 
 #[derive(FromRow)]
@@ -85,7 +91,39 @@ async fn main() {
             match TokioTcpStream::connect(&client_address).await {
                 Ok(mut stream) => {
                     println!("Connected to orca-client");
-                    stream.write_all(args.command.as_bytes()).await.unwrap();
+
+                    let mut files_to_send: Vec<DispatchFile> = Vec::new();
+                    if let Some(files_arg) = args.files {
+                        for file_path_str in files_arg.split(',') {
+                            let file_path = Path::new(file_path_str.trim());
+                            if file_path.exists() && file_path.is_file() {
+                                match fs::read(file_path) {
+                                    Ok(content) => {
+                                        files_to_send.push(DispatchFile {
+                                            name: file_path.file_name().unwrap().to_string_lossy().into_owned(),
+                                            content,
+                                        });
+                                    },
+                                    Err(e) => {
+                                        eprintln!("Error reading file {}: {}", file_path_str, e);
+                                    }
+                                }
+                            } else {
+                                eprintln!("File not found or is not a file: {}", file_path_str);
+                            }
+                        }
+                    }
+
+                    let dispatch_message = DispatchMessage {
+                        command: args.command,
+                        files: files_to_send,
+                    };
+
+                    let serialized_message = serde_json::to_string(&dispatch_message).unwrap();
+                    stream.write_all(serialized_message.as_bytes()).await.unwrap();
+
+                    // Add a delimiter to indicate the end of the JSON message
+                    stream.write_all(b"\n").await.unwrap();
 
                     let mut buffer = vec![0; 1024];
                     match stream.read(&mut buffer).await {
@@ -98,14 +136,18 @@ async fn main() {
                                 .unwrap()
                                 .as_secs();
 
+                            let files_metadata: Vec<DispatchFileMetadata> = dispatch_message.files.iter().map(|f| DispatchFileMetadata { name: f.name.clone() }).collect();
+                            let files_json = serde_json::to_string(&files_metadata).unwrap_or_else(|_| "[]".to_string());
+
                             sqlx::query(
-                                "INSERT INTO events (epoch_time, client_uuid, client_ip, command, response) VALUES (?, ?, ?, ?, ?)",
+                                "INSERT INTO events (epoch_time, client_uuid, client_ip, command, response, files) VALUES (?, ?, ?, ?, ?, ?)",
                             )
                             .bind(&(epoch_time as i64))
                             .bind(&client.uuid)
                             .bind(&client.ip)
-                            .bind(&args.command)
+                            .bind(&dispatch_message.command)
                             .bind(&response)
+                            .bind(&files_json)
                             .execute(&pool)
                             .await
                             .unwrap();
