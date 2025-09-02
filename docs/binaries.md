@@ -103,15 +103,23 @@ The `orca-client` is configured via the `client.json` file located in the projec
 ```json
 {
   "registration_server": "127.0.0.1:8081",
+  "use_tls_for_registration": true,
   "listen_port": 8080,
+  "use_tls_for_listen": true,
+  "cert_path": "path/to/client-cert.pem",
+  "key_path": "path/to/client-key.pem",
   "log_file_path": "client.log",
   "log_level": "info",
-  "workspace_dir": "./client_workspace" // Optional: default is orca-workspace next to executable
+  "workspace_dir": "./client_workspace" 
 }
 ```
 
 *   `registration_server`: The IP address and port of the `orca-registration` server.
+*   `use_tls_for_registration`: (`true`/`false`) Whether to connect to the registration server using TLS. 
 *   `listen_port`: The port on which the client will listen for commands from `orca-dispatch`.
+*   `use_tls_for_listen`: (`true`/`false`) Whether to require incoming dispatch connections to use Mutual TLS (mTLS). If `true`, `cert_path` and `key_path` are required.
+*   `cert_path`: Path to the TLS certificate file (in PEM format) that the client will present to dispatchers. Required if `use_tls_for_listen` is `true`.
+*   `key_path`: Path to the private key file (in PEM format) for the certificate. Required if `use_tls_for_listen` is `true`.
 *   `log_file_path`: The path to the client's log file.
 *   `log_level`: The minimum log level to record (e.g., "info", "debug", "error").
 *   `workspace_dir` (optional): The directory where dispatched files will be saved and commands will be executed. If not specified, a directory named `orca-workspace` will be created next to the `orca-client` executable.
@@ -132,6 +140,26 @@ To run `orca-dispatch`, execute the following command from the project root:
 ```bash
 cargo run --bin orca-dispatch -- <arguments>
 ```
+
+### Configuration (`dispatch.json`)
+
+The `orca-dispatch` tool is configured via the `dispatch.json` file in the project root.
+
+```json
+{
+  "database_url": "mysql://user:password@host:port/database",
+  "client_connect_port": 8080,
+  "use_tls": true,
+  "cert_path": "path/to/dispatch-cert.pem",
+  "key_path": "path/to/dispatch-key.pem"
+}
+```
+
+*   `database_url`: The connection string for the MySQL database, used to find client connection details.
+*   `client_connect_port`: The port that `orca-dispatch` will use when connecting to an `orca-client`. This should match the `listen_port` in the client's configuration.
+*   `use_tls`: (`true`/`false`) Whether to connect to clients using Mutual TLS (mTLS). If `true`, `cert_path` and `key_path` are required.
+*   `cert_path`: Path to the TLS client certificate file (in PEM format) that the dispatcher will present to clients. Required if `use_tls` is `true`.
+*   `key_path`: Path to the private key file (in PEM format) for the certificate. Required if `use_tls` is `true`.
 
 ### Arguments
 

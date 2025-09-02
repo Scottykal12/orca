@@ -4,3 +4,9 @@ client.uuid
 client.log
 workspace
 files
+node_modules
+package-lock.json
+package.json
+localhost-key.pem
+localhost.pem
+ai-funnies

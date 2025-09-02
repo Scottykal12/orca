@@ -4,10 +4,10 @@
 use std::env;
 use std::fs;
 use std::net::{TcpListener, TcpStream};
-use std::io::{Read, Write, BufRead};
-use std::process::{Command, Output};
+use std::io::{Read, Write, BufReader, BufRead};
+use std::process::{Command, Output, exit};
 use std::path::PathBuf;
-use orca::{ClientInfo, ClientConfig, DispatchMessage, DispatchFile};
+use orca::{ClientInfo, ClientConfig, DispatchMessage};
 use mac_address::get_mac_address;
 use local_ip_address::local_ip;
 use hostname;
@@ -15,6 +15,10 @@ use log::{info, warn, error, LevelFilter};
 use log4rs::{append::{console::{ConsoleAppender, Target}, file::FileAppender}, config::{Appender, Config, Root}, encode::pattern::PatternEncoder};
 use std::str::FromStr;
 use serde_json;
+use std::sync::Arc;
+use rustls::{ClientConfig as RustlsClientConfig, ServerConfig as RustlsServerConfig, ServerName};
+use rustls_pemfile::{certs, pkcs8_private_keys};
+use rustls_native_certs::load_native_certs;
 
 // This function executes the command in a cross-platform way.
 fn execute_command(command_str: &str, config: &ClientConfig) -> std::io::Result<Output> {
@@ -44,10 +48,10 @@ fn execute_command(command_str: &str, config: &ClientConfig) -> std::io::Result<
 }
 
 // This function handles a single dispatch server connection.
-fn handle_dispatch(mut stream: TcpStream, config: ClientConfig) {
+fn handle_dispatch<S: Read + Write>(mut stream: S, config: ClientConfig) {
     // Read the incoming message until a newline delimiter.
     let mut buffer = Vec::new();
-    let mut reader = std::io::BufReader::new(&mut stream);
+    let mut reader = BufReader::new(&mut stream);
     match reader.read_until(b'\n', &mut buffer) {
         Ok(bytes_read) if bytes_read > 0 => {
             let message_str = String::from_utf8_lossy(&buffer[..bytes_read]);
@@ -55,7 +59,6 @@ fn handle_dispatch(mut stream: TcpStream, config: ClientConfig) {
                 Ok(dispatch_message) => {
                     info!("Received command: {}", dispatch_message.command);
 
-                    // Determine the workspace directory
                     let workspace_dir = match &config.workspace_dir {
                         Some(dir) => PathBuf::from(dir),
                         None => {
@@ -66,13 +69,11 @@ fn handle_dispatch(mut stream: TcpStream, config: ClientConfig) {
                         }
                     };
 
-                    // Create the workspace directory if it doesn't exist
                     if let Err(e) = fs::create_dir_all(&workspace_dir) {
                         error!("Failed to create workspace directory {}: {}", workspace_dir.display(), e);
                         return;
                     }
 
-                    // Save files to the workspace directory
                     for file in dispatch_message.files {
                         let file_path = workspace_dir.join(&file.name);
                         match fs::write(&file_path, &file.content) {
@@ -81,14 +82,11 @@ fn handle_dispatch(mut stream: TcpStream, config: ClientConfig) {
                         }
                     }
 
-                    // Execute the command
                     let output = execute_command(&dispatch_message.command, &config).expect("failed to execute process");
 
-                    // Send the output back to the dispatch server.
                     stream.write_all(&output.stdout).unwrap();
                     stream.write_all(&output.stderr).unwrap();
 
-                    // Clean up the workspace directory
                     if let Err(e) = fs::remove_dir_all(&workspace_dir) {
                         error!("Failed to remove workspace directory {}: {}", workspace_dir.display(), e);
                     } else {
@@ -109,71 +107,85 @@ fn handle_dispatch(mut stream: TcpStream, config: ClientConfig) {
     }
 }
 
-fn register_client(config: &ClientConfig) {
+fn do_registration(config: &ClientConfig) -> Result<(), Box<dyn std::error::Error>> {
+    if config.use_tls_for_registration {
+        info!("Connecting to registration server with TLS.");
+        let mut root_cert_store = rustls::RootCertStore::empty();
+        let certs = load_native_certs().map_err(|e| format!("could not load platform certs: {}", e))?;
+        for cert in certs {
+            root_cert_store.add(&rustls::Certificate(cert.as_ref().to_vec()))?;
+        }
+        let client_config = RustlsClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(root_cert_store)
+            .with_no_client_auth();
+        
+        let server_name_str = config.registration_server.split(':').next().unwrap_or("");
+        info!("Attempting TLS validation for server name: '{}'", server_name_str);
+        let server_name = ServerName::try_from(server_name_str)
+            .map_err(|e| format!("invalid server name '{}': {}", server_name_str, e))?;
+
+        let mut conn = rustls::ClientConnection::new(Arc::new(client_config), server_name)?;
+        let mut sock = TcpStream::connect(&config.registration_server)?;
+        let mut stream = rustls::Stream::new(&mut conn, &mut sock);
+        register_client(config, &mut stream)?;
+    } else {
+        let mut stream = TcpStream::connect(&config.registration_server)?;
+        register_client(config, &mut stream)?;
+    };
+    Ok(())
+}
+
+fn register_client<S: Read + Write>(config: &ClientConfig, stream: &mut S) -> Result<(), Box<dyn std::error::Error>> {
     info!("Checking in with registration server...");
 
-    // Get client information.
-    let hostname = hostname::get().unwrap().into_string().unwrap();
-    let ip = local_ip().unwrap().to_string();
-    let mac_address = get_mac_address().unwrap().unwrap().to_string();
+    let hostname = hostname::get()?.into_string().map_err(|_| "Invalid hostname")?;
+    let ip = local_ip()?.to_string();
+    let mac_address = get_mac_address()?.ok_or("No MAC address found")?.to_string();
 
-    // Read existing UUID if available, otherwise generate a placeholder.
     let existing_uuid = fs::read_to_string("client.uuid").unwrap_or_else(|_| "UNREGISTERED".to_string());
 
     let client_info = ClientInfo {
         uuid: existing_uuid,
-        hostname: Some(hostname),
+        hostname: Some(hostname.to_string()),
         ip,
         mac_address: Some(mac_address),
     };
 
-    // Connect to the registration server.
-    let mut stream = TcpStream::connect(&config.registration_server).expect("Failed to connect to registration server");
+    let client_info_json = serde_json::to_string(&client_info)?;
+    stream.write_all(client_info_json.as_bytes())?;
 
-    // Send client information.
-    let client_info_json = serde_json::to_string(&client_info).unwrap();
-    stream.write_all(client_info_json.as_bytes()).unwrap();
-
-    // Receive the response from the registration server.
     let mut buffer = [0; 1024];
-    let bytes_read = stream.read(&mut buffer).unwrap();
+    let bytes_read = stream.read(&mut buffer)?;
     let response_str = String::from_utf8_lossy(&buffer[..bytes_read]).to_string();
 
-    // Parse the response from the registration server.
     let received_uuid = if response_str.starts_with("Client registered successfully. UUID: ") || response_str.starts_with("Client updated successfully. UUID: ") {
         response_str.trim_start_matches("Client registered successfully. UUID: ").trim_start_matches("Client updated successfully. UUID: ").to_string()
     } else if response_str == "UUID_IN_USE" {
         warn!("UUID is already in use. Deleting client.uuid and retrying registration.");
-        fs::remove_file("client.uuid").expect("Failed to delete client.uuid");
-        // Recursively call register_client to get a new UUID
-        register_client(config);
-        return; // Exit this call, the recursive call will handle the rest
+        fs::remove_file("client.uuid")?;
+        do_registration(config)?;
+        return Ok(());
     }
     else {
-        // Handle unexpected response, maybe log an error or use a default
-        error!("Unexpected response from registration server: {}", response_str);
-        "UNKNOWN_UUID".to_string() // Or handle as an error
+        return Err(format!("Unexpected response from registration server: {}", response_str).into());
     };
 
-    // Save the received UUID.
-    fs::write("client.uuid", &received_uuid).expect("Failed to write client.uuid");
+    fs::write("client.uuid", &received_uuid)?;
 
     info!("Client registered/checked in with UUID: {}", received_uuid);
+    Ok(())
 }
 
+fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let config_str = fs::read_to_string("client.json")?;
+    let config: ClientConfig = serde_json::from_str(&config_str)?;
 
-fn main() {
-    // Read the client configuration.
-    let config_str = fs::read_to_string("client.json").expect("Failed to read client.json");
-    let config: ClientConfig = serde_json::from_str(&config_str).expect("Failed to parse client.json");
-
-    // Initialize logger
     let log_level = LevelFilter::from_str(&config.log_level).unwrap_or(LevelFilter::Info);
 
     let file_appender = FileAppender::builder()
         .encoder(Box::new(PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S)} {l} - {m}\n")))
-        .build(&config.log_file_path)
-        .expect("Failed to build file appender");
+        .build(&config.log_file_path)?;
 
     let stdout_appender = ConsoleAppender::builder().target(Target::Stdout).build();
 
@@ -185,32 +197,72 @@ fn main() {
                 .appender("file")
                 .appender("stdout")
                 .build(log_level),
-        )
-        .expect("Failed to build log4rs config");
+        )?;
 
-    log4rs::init_config(log_config).expect("Failed to initialize log4rs");
+    log4rs::init_config(log_config)?;
 
-    // Register the client if it's not already registered.
-    register_client(&config);
+    if let Err(e) = do_registration(&config) {
+        error!("Failed to register with server: {}. Please check TLS configuration and server address.", e);
+        return Err(e);
+    }
 
-    // Bind a TCP listener to 0.0.0.0 on the configured port.
     let listen_address = format!("0.0.0.0:{}", config.listen_port);
-    let listener = TcpListener::bind(&listen_address).unwrap();
-    // Print a message to indicate that the client is running.
+    let listener = TcpListener::bind(&listen_address)?;
+    let acceptor = if config.use_tls_for_listen {
+        info!("Listening for dispatch with TLS.");
+        let cert_file = &mut BufReader::new(fs::File::open(&config.cert_path)?);
+        let key_file = &mut BufReader::new(fs::File::open(&config.key_path)?);
+        let cert_chain = certs(cert_file)?.into_iter().map(rustls::Certificate).collect();
+        let mut keys: Vec<rustls::PrivateKey> = pkcs8_private_keys(key_file)?.into_iter().map(rustls::PrivateKey).collect();
+
+        let mut root_cert_store = rustls::RootCertStore::empty();
+        let certs = load_native_certs()?;
+        for cert in certs {
+            root_cert_store.add(&rustls::Certificate(cert.as_ref().to_vec()))?;
+        }
+
+        let client_cert_verifier = std::sync::Arc::new(rustls::server::AllowAnyAuthenticatedClient::new(root_cert_store));
+
+        let server_config = RustlsServerConfig::builder()
+            .with_safe_defaults()
+            .with_client_cert_verifier(client_cert_verifier)
+            .with_single_cert(cert_chain, keys.remove(0))?;
+        Some(Arc::new(server_config))
+    } else {
+        None
+    };
+
     info!("orca-client listening on {}", listen_address);
 
-    // Iterate over incoming connections.
     for stream in listener.incoming() {
         let config_clone = config.clone();
         match stream {
-            // If the connection is successful, handle the dispatch server.
-            Ok(stream) => {
-                handle_dispatch(stream, config_clone);
+            Ok(mut stream) => {
+                if let Some(acceptor) = acceptor.clone() {
+                    match rustls::ServerConnection::new(acceptor) {
+                        Ok(mut conn) => {
+                            let tls_stream = rustls::Stream::new(&mut conn, &mut stream);
+                            handle_dispatch(tls_stream, config_clone);
+                        },
+                        Err(e) => {
+                            error!("mTLS handshake failed: {}", e);
+                        }
+                    }
+                } else {
+                    handle_dispatch(stream, config_clone);
+                }
             }
-            // If there is an error, print the error message.
             Err(e) => {
-                error!("Error: {}", e);
+                error!("Error accepting incoming connection: {}", e);
             }
         }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("[FATAL] {}", e);
+        exit(1);
     }
 }

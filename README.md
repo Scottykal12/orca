@@ -6,7 +6,7 @@
 
 ## What is Orca?
 
-Orca is a distributed command and control (C2) system designed for managing and interacting with remote client machines. It provides a robust framework for dispatching commands, transferring files, and logging operational events across a network of registered clients. Built with Rust, Orca emphasizes performance, reliability, and secure communication, making it suitable for various remote administration and automation tasks.
+Orca is a distributed command and control (C2) system designed for managing and interacting with remote client machines. It provides a robust framework for dispatching commands, transferring files, and logging operational events across a network of registered clients. Built with Rust, Orca emphasizes performance, reliability, and secure communication. It leverages Mutual TLS (mTLS) to ensure all communication between the dispatcher and clients is encrypted and authenticated, making it suitable for various remote administration and automation tasks.
 
 ## Table of Contents
 

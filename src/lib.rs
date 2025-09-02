@@ -14,7 +14,11 @@ pub struct ClientInfo {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ClientConfig {
     pub registration_server: String,
+    pub use_tls_for_registration: bool,
     pub listen_port: u16,
+    pub use_tls_for_listen: bool,
+    pub cert_path: String,
+    pub key_path: String,
     pub log_file_path: String,
     pub log_level: String,
     pub workspace_dir: Option<String>,
@@ -25,6 +29,9 @@ pub struct ClientConfig {
 pub struct DispatchConfig {
     pub database_url: String,
     pub client_connect_port: u16,
+    pub use_tls: bool,
+    pub cert_path: String,
+    pub key_path: String,
 }
 
 // Configuration for the registration server.
@@ -32,6 +39,9 @@ pub struct DispatchConfig {
 pub struct RegistrationConfig {
     pub database_url: String,
     pub listen_address: String,
+    pub use_tls: bool,
+    pub cert_path: String,
+    pub key_path: String,
 }
 
 
@@ -40,6 +50,9 @@ pub struct RegistrationConfig {
 pub struct ApiConfig {
     pub listen_address: String,
     pub dispatch_binary_path: Option<String>,
+    pub use_tls: bool,
+    pub cert_path: String,
+    pub key_path: String,
 }
 
 // Message sent from dispatch to client.

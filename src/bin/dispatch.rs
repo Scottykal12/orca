@@ -6,11 +6,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clap::Parser;
 use sqlx::{MySqlPool, FromRow};
 use orca::{DispatchConfig, DispatchMessage, DispatchFile, DispatchFileMetadata};
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream as TokioTcpStream;
 use std::path::Path;
-use std::io::prelude::*;
+
+trait ReadWrite: tokio::io::AsyncRead + tokio::io::AsyncWrite {}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite> ReadWrite for T {}
+
+use std::sync::Arc;
+use rustls::{ClientConfig, Certificate, PrivateKey, ServerName};
+use rustls_pemfile::{pkcs8_private_keys};
+use tokio_rustls::TlsConnector;
+use std::io::BufReader;
+use std::fs::File;
+use rustls_native_certs::load_native_certs;
+
 
 // Added a comment to force re-compilation and re-preparation of SQLx queries.
 
@@ -31,10 +41,12 @@ struct Args {
     files: Option<String>,
 }
 
+
 #[derive(FromRow)]
 struct ClientQueryResult {
     uuid: String,
     ip: Option<String>,
+    hostname: Option<String>,
 }
 
 // This function initializes the database and creates the 'events' table if it doesn't exist.
@@ -48,7 +60,7 @@ async fn init_db(pool: &MySqlPool) -> sqlx::Result<()> {
             command TEXT,
             response TEXT,
             files TEXT
-        )",
+        )"
     )
     .execute(pool)
     .await?;
@@ -59,7 +71,7 @@ async fn init_db(pool: &MySqlPool) -> sqlx::Result<()> {
 async fn query_client(pool: &MySqlPool, client_identifier: &str) -> sqlx::Result<ClientQueryResult> {
     let client = sqlx::query_as!(
         ClientQueryResult,
-        "SELECT uuid, ip FROM clients WHERE uuid = ? OR ip = ? OR hostname = ? OR mac_address = ?",
+        "SELECT uuid, ip, hostname FROM clients WHERE uuid = ? OR ip = ? OR hostname = ? OR mac_address = ?",
         client_identifier,
         client_identifier,
         client_identifier,
@@ -70,6 +82,7 @@ async fn query_client(pool: &MySqlPool, client_identifier: &str) -> sqlx::Result
 
     Ok(client)
 }
+
 
 #[tokio::main]
 async fn main() {
@@ -88,77 +101,104 @@ async fn main() {
             let client_address = format!("{}:{}", client.ip.as_deref().unwrap_or(""), config.client_connect_port);
             println!("Connecting to client at {}", client_address);
 
-            match TokioTcpStream::connect(&client_address).await {
-                Ok(mut stream) => {
-                    println!("Connected to orca-client");
+            let handle_connection = |mut stream: Box<dyn ReadWrite + Unpin + Send>| async move {
+                println!("Connected to orca-client");
 
-                    let mut files_to_send: Vec<DispatchFile> = Vec::new();
-                    if let Some(files_arg) = args.files {
-                        for file_path_str in files_arg.split(',') {
-                            let file_path = Path::new(file_path_str.trim());
-                            if file_path.exists() && file_path.is_file() {
-                                match fs::read(file_path) {
-                                    Ok(content) => {
-                                        files_to_send.push(DispatchFile {
-                                            name: file_path.file_name().unwrap().to_string_lossy().into_owned(),
-                                            content,
-                                        });
-                                    },
-                                    Err(e) => {
-                                        eprintln!("Error reading file {}: {}", file_path_str, e);
-                                    }
+                let mut files_to_send: Vec<DispatchFile> = Vec::new();
+                if let Some(files_arg) = args.files {
+                    for file_path_str in files_arg.split(',') {
+                        let file_path = Path::new(file_path_str.trim());
+                        if file_path.exists() && file_path.is_file() {
+                            match fs::read(file_path) {
+                                Ok(content) => {
+                                    files_to_send.push(DispatchFile {
+                                        name: file_path.file_name().unwrap().to_string_lossy().into_owned(),
+                                        content,
+                                    });
+                                },
+                                Err(e) => {
+                                    eprintln!("Error reading file {}: {}", file_path_str, e);
                                 }
-                            } else {
-                                eprintln!("File not found or is not a file: {}", file_path_str);
                             }
-                        }
-                    }
-
-                    let dispatch_message = DispatchMessage {
-                        command: args.command,
-                        files: files_to_send,
-                    };
-
-                    let serialized_message = serde_json::to_string(&dispatch_message).unwrap();
-                    stream.write_all(serialized_message.as_bytes()).await.unwrap();
-
-                    // Add a delimiter to indicate the end of the JSON message
-                    stream.write_all(b"\n").await.unwrap();
-
-                    let mut buffer = vec![0; 1024];
-                    match stream.read(&mut buffer).await {
-                        Ok(bytes_read) => {
-                            let response = String::from_utf8_lossy(&buffer[..bytes_read]).to_string();
-                            println!("Received: {}", response);
-
-                            let epoch_time = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs();
-
-                            let files_metadata: Vec<DispatchFileMetadata> = dispatch_message.files.iter().map(|f| DispatchFileMetadata { name: f.name.clone() }).collect();
-                            let files_json = serde_json::to_string(&files_metadata).unwrap_or_else(|_| "[]".to_string());
-
-                            sqlx::query(
-                                "INSERT INTO events (epoch_time, client_uuid, client_ip, command, response, files) VALUES (?, ?, ?, ?, ?, ?)",
-                            )
-                            .bind(&(epoch_time as i64))
-                            .bind(&client.uuid)
-                            .bind(&client.ip)
-                            .bind(&dispatch_message.command)
-                            .bind(&response)
-                            .bind(&files_json)
-                            .execute(&pool)
-                            .await
-                            .unwrap();
-                        }
-                        Err(e) => {
-                            println!("Failed to read from client: {}", e);
+                        } else {
+                            eprintln!("File not found or is not a file: {}", file_path_str);
                         }
                     }
                 }
-                Err(e) => {
-                    println!("Failed to connect to client at {}: {}", client_address, e);
+
+                let dispatch_message = DispatchMessage {
+                    command: args.command,
+                    files: files_to_send,
+                };
+
+                let serialized_message = serde_json::to_string(&dispatch_message).unwrap();
+                stream.write_all(serialized_message.as_bytes()).await.unwrap();
+                stream.write_all(b"\n").await.unwrap();
+
+                let mut buffer = vec![0; 1024];
+                match stream.read(&mut buffer).await {
+                    Ok(bytes_read) => {
+                        let response = String::from_utf8_lossy(&buffer[..bytes_read]).to_string();
+                        println!("Received: {}", response);
+
+                        let epoch_time = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs();
+
+                        let files_metadata: Vec<DispatchFileMetadata> = dispatch_message.files.iter().map(|f| DispatchFileMetadata { name: f.name.clone() }).collect();
+                        let files_json = serde_json::to_string(&files_metadata).unwrap_or_else(|_| "[]".to_string());
+
+                        sqlx::query(
+                            "INSERT INTO events (epoch_time, client_uuid, client_ip, command, response, files) VALUES (?, ?, ?, ?, ?, ?)",
+                        )
+                        .bind(&(epoch_time as i64))
+                        .bind(&client.uuid)
+                        .bind(&client.ip)
+                        .bind(&dispatch_message.command)
+                        .bind(&response)
+                        .bind(&files_json)
+                        .execute(&pool)
+                        .await
+                        .unwrap();
+                    } 
+                    Err(e) => {
+                        println!("Failed to read from client: {}", e);
+                    }
+                }
+            };
+
+            if config.use_tls {
+                let mut root_cert_store = rustls::RootCertStore::empty();
+                let native_certs = load_native_certs().expect("could not load platform certs");
+                for cert in native_certs {
+                    root_cert_store.add(&rustls::Certificate(cert.as_ref().to_vec())).unwrap();
+                }
+
+                let cert_file = &mut BufReader::new(File::open(&config.cert_path).unwrap());
+                let key_file = &mut BufReader::new(File::open(&config.key_path).unwrap());
+                let cert_chain = rustls_pemfile::certs(cert_file).unwrap().into_iter().map(Certificate).collect();
+                let mut keys = pkcs8_private_keys(key_file).unwrap().into_iter().map(PrivateKey).collect::<Vec<_>>();
+
+                let client_config = ClientConfig::builder()
+                    .with_safe_defaults()
+                    .with_root_certificates(root_cert_store)
+                    .with_client_auth_cert(cert_chain, keys.remove(0))
+                    .unwrap();
+
+                let connector = TlsConnector::from(Arc::new(client_config));
+                let stream = TokioTcpStream::connect(&client_address).await.unwrap();
+                let domain = ServerName::try_from(client.hostname.as_deref().unwrap_or("localhost")).unwrap();
+                let stream = connector.connect(domain, stream).await.unwrap();
+                handle_connection(Box::new(stream)).await;
+            } else {
+                match TokioTcpStream::connect(&client_address).await {
+                    Ok(stream) => {
+                        handle_connection(Box::new(stream)).await;
+                    }
+                    Err(e) => {
+                        println!("Failed to connect to client at {}: {}", client_address, e);
+                    }
                 }
             }
         }

@@ -2,20 +2,46 @@
 // It listens for clients, registers them, and stores their information in the database.
 
 use std::fs;
+use std::sync::Arc;
 use sqlx::MySqlPool;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 use orca::{ClientInfo, RegistrationConfig};
 use uuid::Uuid;
+use std::io::BufReader;
+use rustls_pemfile::{certs, pkcs8_private_keys};
+use tokio_rustls::TlsAcceptor;
+use tokio_rustls::rustls::{self, Certificate, PrivateKey};
 
 // This function initializes the database and creates the 'clients' table if it doesn't exist.
 async fn init_db(pool: &MySqlPool) -> sqlx::Result<()> {
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS clients (\n            uuid VARCHAR(255) PRIMARY KEY,\n            ip VARCHAR(255),\n            hostname VARCHAR(255),\n            mac_address VARCHAR(255)\n        )"
+        "CREATE TABLE IF NOT EXISTS clients (
+            uuid VARCHAR(255) PRIMARY KEY,
+            ip VARCHAR(255),
+            hostname VARCHAR(255),
+            mac_address VARCHAR(255)
+        )"
     )
     .execute(pool)
     .await?;
     Ok(())
+}
+
+fn load_certs(path: &str) -> std::io::Result<Vec<Certificate>> {
+    let certfile = fs::File::open(path)?;
+    let mut reader = BufReader::new(certfile);
+    certs(&mut reader)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid cert"))
+        .map(|mut certs| certs.drain(..).map(Certificate).collect())
+}
+
+fn load_private_key(path: &str) -> std::io::Result<PrivateKey> {
+    let keyfile = fs::File::open(path)?;
+    let mut reader = BufReader::new(keyfile);
+    pkcs8_private_keys(&mut reader)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid key"))
+        .map(|mut keys| PrivateKey(keys.remove(0)))
 }
 
 #[tokio::main]
@@ -35,21 +61,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("Failed to execute simple test query to database");
 
     let listener = TcpListener::bind(&config.listen_address).await?;
+    let acceptor = if config.use_tls {
+        println!("TLS is enabled. Loading certificate and key.");
+        let certs = load_certs(&config.cert_path)?;
+        let key = load_private_key(&config.key_path)?;
+        let config = rustls::ServerConfig::builder()
+            .with_safe_defaults()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
+        Some(TlsAcceptor::from(Arc::new(config)))
+    } else {
+        None
+    };
+
     println!("Registration server listening on {}", config.listen_address);
 
     loop {
         let (socket, _) = listener.accept().await?;
-        let pool = pool.clone(); // Clone the pool for each task
-        tokio::spawn(async move {
-            let _ = handle_client(socket, pool).await;
-        });
+        
+        if let Some(acceptor) = acceptor.clone() {
+            let pool = pool.clone();
+            tokio::spawn(async move {
+                match acceptor.accept(socket).await {
+                    Ok(tls_stream) => {
+                        if let Err(e) = handle_client(tls_stream, pool).await {
+                            eprintln!("Error handling client: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("TLS handshake error: {}. Ensure client is using TLS.", e);
+                    }
+                }
+            });
+        } else {
+            let pool = pool.clone();
+            tokio::spawn(async move {
+                if let Err(e) = handle_client(socket, pool).await {
+                    eprintln!("Error handling client: {}", e);
+                }
+            });
+        }
     }
 }
 
-async fn handle_client(mut stream: TcpStream, pool: MySqlPool) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_client<S>(mut stream: S, pool: MySqlPool) -> Result<(), Box<dyn std::error::Error>>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let mut buffer = vec![0; 1024];
     match stream.read(&mut buffer).await {
         Ok(bytes_read) => {
+            if bytes_read == 0 { // Handle case where stream is closed
+                return Ok(())
+            }
             let received_data = String::from_utf8_lossy(&buffer[..bytes_read]);
             println!("Received from client: {}", received_data);
 
@@ -101,8 +166,8 @@ async fn handle_client(mut stream: TcpStream, pool: MySqlPool) -> Result<(), Box
                                 client_info.uuid.clone()
                             };
 
-                            println!("Attempting to insert client with UUID: {}, IP: {}, Hostname: {:?}, MAC: {:?}",
-                                actual_uuid, client_info.ip, client_info.hostname, client_info.mac_address);
+                            println!("Attempting to insert client with UUID: {}, IP: {}, Hostname: {:?}, MAC: {:?}"
+                                , actual_uuid, client_info.ip, client_info.hostname, client_info.mac_address);
 
                             sqlx::query(
                                 "INSERT INTO clients (uuid, ip, hostname, mac_address) VALUES (?, ?, ?, ?)"

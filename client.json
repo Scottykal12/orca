@@ -1,6 +1,10 @@
 {
-  "registration_server": "127.0.0.1:8081",
+  "registration_server": "192.168.2.58:8081",
+  "use_tls_for_registration": true,
   "listen_port": 8080,
+  "use_tls_for_listen": true,
+  "cert_path": "client-cert.pem",
+  "key_path": "client-key.pem",
   "log_file_path": "client.log",
   "log_level": "info",
   "workspace_dir": "./workspace"

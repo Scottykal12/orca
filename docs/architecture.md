@@ -74,11 +74,29 @@ The typical workflow within the Orca system is as follows:
 ## Communication Protocols
 
 *   **Client-Registration:** Simple TCP-based communication for sending client info and receiving registration status.
-*   **Dispatch-Client:** Custom TCP-based protocol. First, a JSON-serialized `DispatchMessage` (containing command and file metadata) is sent, followed by the raw binary content of any associated files. A newline character (`\n`) acts as a delimiter after the JSON message.
+*   **Dispatch-Client:** Custom TCP-based protocol. A JSON-serialized `DispatchMessage` is sent, followed by a newline delimiter (`\n`). This connection can be secured with Mutual TLS (see [Security](#security) section below).
 *   **API-Web Client:** Standard HTTP/HTTPS (RESTful API).
 *   **API-Dispatch:** `orca-api` communicates with `orca-dispatch` via command-line arguments and standard I/O (stdout/stderr) for results.
 
+## Security
+
+### Mutual TLS (mTLS)
+
+The connection between the `orca-dispatch` and `orca-client` components can be secured using Mutual TLS (mTLS), providing both encryption and two-way authentication. This is the recommended configuration for production environments.
+
+*   **Activation:** mTLS is enabled by setting the `use_tls` flag to `true` in both `client.json` and `dispatch.json`.
+*   **Trust Model:** The system is designed to use the operating system's native certificate trust store. This means that the root Certificate Authority (CA) that issues the client and dispatch certificates must be trusted by the operating systems on both machines.
+*   **Roles:**
+    *   The `orca-client` acts as the TLS server.
+    *   The `orca-dispatch` acts as the TLS client.
+*   **Verification:** When mTLS is enabled:
+    1.  The `orca-dispatch` (TLS client) verifies the `orca-client`'s (TLS server) certificate against the OS trust store.
+    2.  The `orca-client` (TLS server) requires the `orca-dispatch` (TLS client) to present its own certificate, which it also verifies against the OS trust store.
+
+This ensures that only trusted dispatchers can connect to clients, and that dispatchers are connecting to legitimate clients.
+
 ## Database Usage
+
 
 The project utilizes a MySQL database for:
 

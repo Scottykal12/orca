@@ -39,6 +39,41 @@ Orca requires a MySQL database to store client information and event logs. You c
     ```
     This will create the `orca_db` database with `clients` and `events` tables. Refer to the [Database Management Script](manage-db.md) documentation for more details and customization options.
 
+## Certificate Setup for Mutual TLS
+
+For secure communication between the `orca-dispatch` and `orca-client` components, the project is configured to use Mutual TLS (mTLS). This setup is mandatory if `use_tls` is enabled in the configuration files.
+
+### Requirements
+
+1.  **Root Certificate Authority (CA):** You need a CA to sign your certificates. The root certificate of this CA must be installed in the operating system's trust store on any machine running `orca-dispatch` or `orca-client`.
+2.  **Server Certificate:** A server certificate and private key for the `orca-client`.
+3.  **Client Certificate:** A client certificate and private key for the `orca-dispatch`.
+
+### Generating Certificates for Development (Example using `mkcert`)
+
+For local development and testing, the easiest way to generate the required certificates and set up a local CA is by using the [`mkcert`](https://github.com/FiloSottile/mkcert) tool.
+
+1.  **Install `mkcert`:** Follow the installation instructions for your operating system on the `mkcert` website.
+
+2.  **Create and Install a Local CA:** This command creates a new local CA and automatically installs its root certificate into your system's trust store. You only need to do this once.
+    ```bash
+    mkcert -install
+    ```
+
+3.  **Generate Server Certificate for `orca-client`:** This certificate will be used by the client to identify itself to the dispatcher. Run this in your project's root directory.
+    ```bash
+    mkcert -cert-file client-cert.pem -key-file client-key.pem localhost 127.0.0.1 ::1
+    ```
+    This creates `client-cert.pem` and `client-key.pem` valid for `localhost`.
+
+4.  **Generate Client Certificate for `orca-dispatch`:** This certificate will be used by the dispatcher to identify itself to the client. Run this in your project's root directory.
+    ```bash
+    mkcert -client -cert-file dispatch-cert.pem -key-file dispatch-key.pem dispatch.orca.dev
+    ```
+    This creates `dispatch-cert.pem` and `dispatch-key.pem`. The hostname (`dispatch.orca.dev`) is a placeholder and can be anything you like for a client certificate.
+
+5.  **Configure JSON files:** After generating the files, make sure the paths in `client.json` and `dispatch.json` point to the correct locations of your newly created `.pem` files.
+
 ## Building the Project
 
 Navigate to the root directory of the Orca project in your terminal.

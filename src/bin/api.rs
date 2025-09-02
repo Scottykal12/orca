@@ -1,9 +1,12 @@
-use actix_web::{post, web, App, HttpResponse, HttpServer, Responder};
 use actix_cors::Cors;
-use serde::{Deserialize, Serialize};
-use std::process::Command;
-use std::fs;
+use actix_web::{post, web, App, HttpResponse, HttpServer, Responder};
 use orca::ApiConfig;
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::process::Command;
+use rustls::{ServerConfig, Certificate, PrivateKey};
+use rustls_pemfile::{certs, pkcs8_private_keys};
+use std::io::BufReader;
 
 #[derive(Deserialize)]
 struct DispatchRequest {
@@ -55,11 +58,9 @@ async fn main() -> std::io::Result<()> {
     let config: ApiConfig = serde_json::from_str(&config_str).expect("Failed to parse api.json");
 
     let listen_address = config.listen_address.clone();
-    let app_data = web::Data::new(config.clone()); // Clone config for each worker
+    let app_data = web::Data::new(config.clone());
 
-    println!("API server listening on {}", listen_address);
-
-    HttpServer::new(move || {
+    let server = HttpServer::new(move || {
         let cors = Cors::default()
             .allow_any_origin()
             .allow_any_method()
@@ -67,10 +68,44 @@ async fn main() -> std::io::Result<()> {
 
         App::new()
             .wrap(cors)
-            .app_data(app_data.clone()) // Pass app_data to the App
+            .app_data(app_data.clone())
             .service(dispatch_command)
-    })
-    .bind(listen_address)?
-    .run()
-    .await
+    });
+
+    if config.use_tls {
+        println!("TLS is enabled with rustls. Loading certificate and key.");
+        // load TLS cert/key
+        let cert_file = &mut BufReader::new(fs::File::open(&config.cert_path)?);
+        let key_file = &mut BufReader::new(fs::File::open(&config.key_path)?);
+
+        let cert_chain = certs(cert_file)
+            .unwrap()
+            .into_iter()
+            .map(Certificate)
+            .collect();
+        let mut keys: Vec<PrivateKey> = pkcs8_private_keys(key_file)
+            .unwrap()
+            .into_iter()
+            .map(PrivateKey)
+            .collect();
+
+        if keys.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "could not find PKCS 8 private key in key file",
+            ));
+        }
+
+        let tls_config = ServerConfig::builder()
+            .with_safe_defaults()
+            .with_no_client_auth()
+            .with_single_cert(cert_chain, keys.remove(0))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+        println!("API server listening on https://{}", listen_address);
+        server.bind_rustls_021(listen_address, tls_config)?.run().await
+    } else {
+        println!("API server listening on http://{}", listen_address);
+        server.bind(listen_address)?.run().await
+    }
 }
