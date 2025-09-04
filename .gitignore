@@ -10,3 +10,6 @@ package.json
 localhost-key.pem
 localhost.pem
 ai-funnies
+.aiexclude
+dispatch-key.pem
+dispatch.pem

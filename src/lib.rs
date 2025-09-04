@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
+use sqlx::{FromRow, MySqlPool};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 // Information about a client.
 #[derive(Serialize, Deserialize, Debug, FromRow)]
@@ -22,6 +23,7 @@ pub struct ClientConfig {
     pub log_file_path: String,
     pub log_level: String,
     pub workspace_dir: Option<String>,
+    pub database_url: String,
 }
 
 // Configuration for the dispatch server.
@@ -42,6 +44,7 @@ pub struct RegistrationConfig {
     pub use_tls: bool,
     pub cert_path: String,
     pub key_path: String,
+    pub log_level: String,
 }
 
 
@@ -53,6 +56,8 @@ pub struct ApiConfig {
     pub use_tls: bool,
     pub cert_path: String,
     pub key_path: String,
+    pub database_url: String,
+    pub log_level: String,
 }
 
 // Message sent from dispatch to client.
@@ -72,4 +77,16 @@ pub struct DispatchFile {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct DispatchFileMetadata {
     pub name: String,
+}
+
+pub async fn log_to_db(pool: &MySqlPool, level: &str, message: &str) {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs() as i64;
+    let log_entry = format!("[{}] {}", level, message);
+    match sqlx::query!("INSERT INTO logs (time, info) VALUES (?, ?)", now, log_entry)
+        .execute(pool)
+        .await
+    {
+        Ok(_) => {},
+        Err(e) => eprintln!("Failed to log to database: {}", e),
+    }
 }

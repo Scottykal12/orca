@@ -6,12 +6,15 @@ use std::sync::Arc;
 use sqlx::MySqlPool;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use orca::{ClientInfo, RegistrationConfig};
+use orca::{ClientInfo, RegistrationConfig, log_to_db};
 use uuid::Uuid;
 use std::io::BufReader;
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::rustls::{self, Certificate, PrivateKey};
+use log::{info, error, LevelFilter};
+extern crate env_logger;
+use std::str::FromStr;
 
 // This function initializes the database and creates the 'clients' table if it doesn't exist.
 async fn init_db(pool: &MySqlPool) -> sqlx::Result<()> {
@@ -25,6 +28,7 @@ async fn init_db(pool: &MySqlPool) -> sqlx::Result<()> {
     )
     .execute(pool)
     .await?;
+    sqlx::query("CREATE TABLE IF NOT EXISTS logs (id INT AUTO_INCREMENT PRIMARY KEY, time BIGINT, info TEXT)").execute(pool).await?;
     Ok(())
 }
 
@@ -45,10 +49,13 @@ fn load_private_key(path: &str) -> std::io::Result<PrivateKey> {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Read the registration configuration.
     let config_str = fs::read_to_string("registration.json").expect("Failed to read registration.json");
     let config: RegistrationConfig = serde_json::from_str(&config_str).expect("Failed to parse registration.json");
+
+    let log_level = LevelFilter::from_str(&config.log_level).unwrap_or(LevelFilter::Info);
+    env_logger::builder().filter_level(log_level).init();
 
     // Connect to the database.
     let pool = MySqlPool::connect(&config.database_url).await.expect("Failed to open database");
@@ -62,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = TcpListener::bind(&config.listen_address).await?;
     let acceptor = if config.use_tls {
-        println!("TLS is enabled. Loading certificate and key.");
+        info!("TLS is enabled. Loading certificate and key.");
         let certs = load_certs(&config.cert_path)?;
         let key = load_private_key(&config.key_path)?;
         let config = rustls::ServerConfig::builder()
@@ -75,7 +82,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    println!("Registration server listening on {}", config.listen_address);
+    info!("Registration server listening on {}", config.listen_address);
+    log_to_db(&pool, "INFO", &format!("Registration server listening on {}", config.listen_address)).await;
 
     loop {
         let (socket, _) = listener.accept().await?;
@@ -85,27 +93,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tokio::spawn(async move {
                 match acceptor.accept(socket).await {
                     Ok(tls_stream) => {
-                        if let Err(e) = handle_client(tls_stream, pool).await {
-                            eprintln!("Error handling client: {}", e);
+                        if let Err(e) = handle_client(tls_stream, pool.clone()).await {
+                            error!("Error handling client: {}", e);
+                            log_to_db(&pool, "ERROR", &format!("Error handling client: {}", e)).await;
                         }
                     }
                     Err(e) => {
-                        eprintln!("TLS handshake error: {}. Ensure client is using TLS.", e);
+                        error!("TLS handshake error: {}. Ensure client is using TLS.", e);
+                        log_to_db(&pool, "ERROR", &format!("TLS handshake error: {}. Ensure client is using TLS.", e)).await;
                     }
                 }
             });
         } else {
             let pool = pool.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_client(socket, pool).await {
-                    eprintln!("Error handling client: {}", e);
+                if let Err(e) = handle_client(socket, pool.clone()).await {
+                    error!("Error handling client: {}", e);
+                    log_to_db(&pool, "ERROR", &format!("Error handling client: {}", e)).await;
                 }
             });
         }
     }
 }
 
-async fn handle_client<S>(mut stream: S, pool: MySqlPool) -> Result<(), Box<dyn std::error::Error>>
+async fn handle_client<S>(mut stream: S, pool: MySqlPool) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -116,11 +127,13 @@ where
                 return Ok(())
             }
             let received_data = String::from_utf8_lossy(&buffer[..bytes_read]);
-            println!("Received from client: {}", received_data);
+            info!("Received from client: {}", received_data);
+            log_to_db(&pool, "INFO", &format!("Received from client: {}", received_data)).await;
 
             match serde_json::from_str::<ClientInfo>(&received_data) {
                 Ok(client_info) => {
-                    println!("Parsed ClientInfo: {:?}", client_info);
+                    info!("Parsed ClientInfo: {:?}", client_info);
+                    log_to_db(&pool, "INFO", &format!("Parsed ClientInfo: {:?}", client_info)).await;
 
                     // Check if client exists
                     let client_exists = sqlx::query_as::<_, ClientInfo>(
@@ -134,7 +147,8 @@ where
                         Ok(Some(existing_client)) => {
                             if existing_client.mac_address == client_info.mac_address {
                                 // Same client, update IP and hostname
-                                println!("Client with UUID {} found. Updating IP and hostname.", client_info.uuid);
+                                info!("Client with UUID {} found. Updating IP and hostname.", client_info.uuid);
+                                log_to_db(&pool, "INFO", &format!("Client with UUID {} found. Updating IP and hostname.", client_info.uuid)).await;
                                 sqlx::query(
                                     "UPDATE clients SET ip = ?, hostname = ? WHERE uuid = ?"
                                 )
@@ -144,21 +158,28 @@ where
                                 .execute(&pool)
                                 .await
                                 .map_err(|e| {
-                                    eprintln!("Error updating client: {:?}", e);
+                                    let pool = pool.clone();
+                                    let e_clone = e.to_string();
+                                    tokio::spawn(async move {
+                                        error!("Error updating client: {:?}", e_clone);
+                                        log_to_db(&pool, "ERROR", &format!("Error updating client: {:?}", e_clone)).await;
+                                    });
                                     e
                                 })?;
                                 let response = format!("Client updated successfully. UUID: {}", client_info.uuid);
                                 stream.write_all(response.as_bytes()).await?;
                             } else {
                                 // Different client trying to use existing UUID
-                                println!("Client with UUID {} already exists but MAC address does not match. Instructing client to get a new UUID.", client_info.uuid);
+                                error!("Client with UUID {} already exists but MAC address does not match. Instructing client to get a new UUID.", client_info.uuid);
+                                log_to_db(&pool, "ERROR", &format!("Client with UUID {} already exists but MAC address does not match. Instructing client to get a new UUID.", client_info.uuid)).await;
                                 let response = "UUID_IN_USE";
                                 stream.write_all(response.as_bytes()).await?;
                             }
                         }
                         Ok(None) => {
                             // Client does not exist, insert
-                            println!("Client with UUID {} does not exist. Registering...", client_info.uuid);
+                            info!("Client with UUID {} does not exist. Registering...", client_info.uuid);
+                            log_to_db(&pool, "INFO", &format!("Client with UUID {} does not exist. Registering...", client_info.uuid)).await;
 
                             let actual_uuid = if client_info.uuid.is_empty() || client_info.uuid == "UNREGISTERED" || client_info.uuid == "UNKNOWN_UUID" {
                                 Uuid::new_v4().to_string()
@@ -166,8 +187,10 @@ where
                                 client_info.uuid.clone()
                             };
 
-                            println!("Attempting to insert client with UUID: {}, IP: {}, Hostname: {:?}, MAC: {:?}"
+                            info!("Attempting to insert client with UUID: {}, IP: {}, Hostname: {:?}, MAC: {:?}"
                                 , actual_uuid, client_info.ip, client_info.hostname, client_info.mac_address);
+                            log_to_db(&pool, "INFO", &format!("Attempting to insert client with UUID: {}, IP: {}, Hostname: {:?}, MAC: {:?}"
+                                , actual_uuid, client_info.ip, client_info.hostname, client_info.mac_address)).await;
 
                             sqlx::query(
                                 "INSERT INTO clients (uuid, ip, hostname, mac_address) VALUES (?, ?, ?, ?)"
@@ -179,28 +202,36 @@ where
                             .execute(&pool)
                             .await
                             .map_err(|e| {
-                                eprintln!("Error inserting client: {:?}", e);
+                                let pool = pool.clone();
+                                let e_clone = e.to_string();
+                                tokio::spawn(async move {
+                                    error!("Error inserting client: {:?}", e_clone);
+                                    log_to_db(&pool, "ERROR", &format!("Error inserting client: {:?}", e_clone)).await;
+                                });
                                 e
                             })?;
                             let response = format!("Client registered successfully. UUID: {}", actual_uuid);
                             stream.write_all(response.as_bytes()).await?;
                         }
                         Err(e) => {
-                            eprintln!("Database query error: {}", e);
+                            error!("Database query error: {}", e);
+                            log_to_db(&pool, "ERROR", &format!("Database query error: {}", e)).await;
                             let response = format!("Database error: {}", e);
                             stream.write_all(response.as_bytes()).await?;
                         }
                     }
                 }
                 Err(e) => {
-                    eprintln!("Failed to parse ClientInfo: {}", e);
+                    error!("Failed to parse ClientInfo: {}", e);
+                    log_to_db(&pool, "ERROR", &format!("Failed to parse ClientInfo: {}", e)).await;
                     let response = format!("Error parsing client info: {}", e);
                     stream.write_all(response.as_bytes()).await?;
                 }
             }
         }
         Err(e) => {
-            eprintln!("Failed to read from socket: {}", e);
+            error!("Failed to read from socket: {}", e);
+            log_to_db(&pool, "ERROR", &format!("Failed to read from socket: {}", e)).await;
             return Err(e.into());
         }
     }

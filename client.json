@@ -3,9 +3,10 @@
   "use_tls_for_registration": true,
   "listen_port": 8080,
   "use_tls_for_listen": true,
-  "cert_path": "client-cert.pem",
-  "key_path": "client-key.pem",
+  "cert_path": "localhost.pem",
+  "key_path": "localhost-key.pem",
   "log_file_path": "client.log",
   "log_level": "info",
-  "workspace_dir": "./workspace"
+  "workspace_dir": "./workspace",
+  "database_url": "mysql://root:password@localhost:3306/orca"
 }

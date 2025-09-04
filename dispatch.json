@@ -2,6 +2,6 @@
   "database_url": "mysql://root:password@localhost:3306/orca",
   "client_connect_port": 8080,
   "use_tls": true,
-  "cert_path": "localhost.pem",
-  "key_path": "localhost-key.pem"
+  "cert_path": "dispatch.pem",
+  "key_path": "dispatch-key.pem"
 }

@@ -1,12 +1,21 @@
 use actix_cors::Cors;
 use actix_web::{post, web, App, HttpResponse, HttpServer, Responder};
-use orca::ApiConfig;
+use orca::{ApiConfig, log_to_db};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::process::Command;
 use rustls::{ServerConfig, Certificate, PrivateKey};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use std::io::BufReader;
+use log::{info, error, LevelFilter};
+use sqlx::mysql::MySqlPool;
+use std::str::FromStr;
+extern crate env_logger;
+
+async fn init_db(pool: &MySqlPool) -> sqlx::Result<()> {
+    sqlx::query("CREATE TABLE IF NOT EXISTS logs (time BIGINT, info TEXT)").execute(pool).await?;
+    Ok(())
+}
 
 #[derive(Deserialize)]
 struct DispatchRequest {
@@ -23,12 +32,17 @@ struct DispatchResponse {
 }
 
 #[post("/dispatch")]
-async fn dispatch_command(req: web::Json<DispatchRequest>, app_data: web::Data<ApiConfig>) -> impl Responder {
+async fn dispatch_command(req: web::Json<DispatchRequest>, app_data: web::Data<ApiConfig>, db_pool: web::Data<MySqlPool>) -> impl Responder {
     let dispatch_bin_path = app_data.dispatch_binary_path.as_ref().cloned().unwrap_or_default();
 
     if dispatch_bin_path.is_empty() {
+        error!("dispatch_binary_path is not set or is empty in api.json. Please set it to the path of the orca-dispatch binary.");
+        log_to_db(&db_pool, "ERROR", "dispatch_binary_path is not set or is empty in api.json.").await;
         panic!("dispatch_binary_path is not set or is empty in api.json. Please set it to the path of the orca-dispatch binary.");
     }
+
+    info!("Received dispatch command: {}", req.command);
+    log_to_db(&db_pool, "INFO", &format!("Received dispatch command: {}", req.command)).await;
 
     let mut cmd = Command::new(dispatch_bin_path);
     cmd.arg("-c")
@@ -48,6 +62,14 @@ async fn dispatch_command(req: web::Json<DispatchRequest>, app_data: web::Data<A
         success: output.status.success(),
     };
 
+    if !response.success {
+        error!("Dispatch command failed: {}", response.stderr);
+        log_to_db(&db_pool, "ERROR", &format!("Dispatch command failed: {}", response.stderr)).await;
+    } else {
+        info!("Dispatch command successful: {}", response.stdout);
+        log_to_db(&db_pool, "INFO", &format!("Dispatch command successful: {}", response.stdout)).await;
+    }
+
     HttpResponse::Ok().json(response)
 }
 
@@ -57,8 +79,17 @@ async fn main() -> std::io::Result<()> {
     let config_str = fs::read_to_string("api.json").expect("Failed to read api.json");
     let config: ApiConfig = serde_json::from_str(&config_str).expect("Failed to parse api.json");
 
+    // Initialize logger
+    let log_level = LevelFilter::from_str(&config.log_level).unwrap_or(LevelFilter::Info);
+    env_logger::builder().filter_level(log_level).init();
+
     let listen_address = config.listen_address.clone();
     let app_data = web::Data::new(config.clone());
+
+    // Create database pool
+    let pool = MySqlPool::connect(&config.database_url).await.expect("Failed to connect to database");
+    init_db(&pool).await.expect("Failed to initialize database");
+    let db_pool = web::Data::new(pool);
 
     let server = HttpServer::new(move || {
         let cors = Cors::default()
@@ -69,11 +100,12 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(cors)
             .app_data(app_data.clone())
+            .app_data(db_pool.clone())
             .service(dispatch_command)
     });
 
     if config.use_tls {
-        println!("TLS is enabled with rustls. Loading certificate and key.");
+        info!("TLS is enabled with rustls. Loading certificate and key.");
         // load TLS cert/key
         let cert_file = &mut BufReader::new(fs::File::open(&config.cert_path)?);
         let key_file = &mut BufReader::new(fs::File::open(&config.key_path)?);
@@ -90,6 +122,7 @@ async fn main() -> std::io::Result<()> {
             .collect();
 
         if keys.is_empty() {
+            error!("could not find PKCS 8 private key in key file");
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "could not find PKCS 8 private key in key file",
@@ -102,10 +135,10 @@ async fn main() -> std::io::Result<()> {
             .with_single_cert(cert_chain, keys.remove(0))
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
-        println!("API server listening on https://{}", listen_address);
+        info!("API server listening on https://{}", listen_address);
         server.bind_rustls_021(listen_address, tls_config)?.run().await
     } else {
-        println!("API server listening on http://{}", listen_address);
+        info!("API server listening on http://{}", listen_address);
         server.bind(listen_address)?.run().await
     }
 }

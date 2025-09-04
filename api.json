@@ -1,7 +1,9 @@
 {
+  "database_url": "mysql://root:password@localhost:3306/orca",
   "listen_address": "127.0.0.1:8082",
   "dispatch_binary_path": "c:\\Users\\scott\\Projects\\orca\\target\\debug\\orca-dispatch.exe",
   "use_tls": true,
   "cert_path": "localhost.pem",
-  "key_path": "localhost-key.pem"
+  "key_path": "localhost-key.pem",
+  "log_level": "info"
 }
