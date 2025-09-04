@@ -19,3 +19,9 @@ Orca is a distributed command and control (C2) system designed for managing and 
 *   [Orca Debug Webpages](docs/debug-website-setup.md)
 *   [Database Management Script](docs/manage-db.md)
 *   [Building and Installing Orca](docs/build-install.md)
+
+## Orca Archictect Diagram
+
+<p align="center">
+  <img src="./images/ArchitectureDiagram.svg" alt="Architecture Diagram" width="1000"/>
+</p>
