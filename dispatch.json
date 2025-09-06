@@ -3,5 +3,6 @@
   "client_connect_port": 8080,
   "use_tls": true,
   "cert_path": "dispatch.pem",
-  "key_path": "dispatch-key.pem"
+  "key_path": "dispatch-key.pem",
+  "log_level": "info"
 }
