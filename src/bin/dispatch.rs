@@ -9,8 +9,9 @@ use orca::{DispatchConfig, DispatchMessage, DispatchFile, DispatchFileMetadata, 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream as TokioTcpStream;
 use std::path::Path;
-use log::{info, error};
+use log::{info, error, LevelFilter};
 extern crate env_logger;
+use std::str::FromStr;
 
 trait ReadWrite: tokio::io::AsyncRead + tokio::io::AsyncWrite {}
 impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite> ReadWrite for T {}
@@ -67,7 +68,7 @@ async fn init_db(pool: &MySqlPool) -> sqlx::Result<()>
     )
     .execute(pool)
     .await?;
-    sqlx::query("CREATE TABLE IF NOT EXISTS logs (id INT AUTO_INCREMENT PRIMARY KEY, time BIGINT, info TEXT)").execute(pool).await?;
+    sqlx::query("CREATE TABLE IF NOT EXISTS logs (id INT AUTO_INCREMENT PRIMARY KEY, time BIGINT, service TEXT, severity TEXT, info TEXT)").execute(pool).await?;
     Ok(())
 }
 
@@ -91,7 +92,14 @@ async fn query_client(pool: &MySqlPool, client_identifier: &str) -> sqlx::Result
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-    env_logger::init();
+
+    // Read the dispatch configuration.
+    let config_str = fs::read_to_string("dispatch.json").expect("Failed to read dispatch.json");
+    let config: DispatchConfig = serde_json::from_str(&config_str).expect("Failed to parse dispatch.json");
+
+    // Initialize logger
+    let log_level = LevelFilter::from_str(&config.log_level).unwrap_or(LevelFilter::Info);
+    env_logger::builder().filter_level(log_level).init();
 
     // Read the dispatch configuration.
     let config_str = fs::read_to_string("dispatch.json").expect("Failed to read dispatch.json");
@@ -105,7 +113,7 @@ async fn main() {
         Ok(client) => {
             let client_address = format!("{}:{}", client.ip.as_deref().unwrap_or(""), config.client_connect_port);
             info!("Connecting to client at {}", client_address);
-            log_to_db(&pool, "INFO", &format!("Connecting to client at {}", client_address)).await;
+            log_to_db(&pool, "dispatch", "INFO", &format!("Connecting to client at {}", client_address)).await;
 
             let handle_connection = |mut stream: Box<dyn ReadWrite + Unpin + Send>| {
                 let pool = pool.clone();
@@ -114,7 +122,7 @@ async fn main() {
                     tokio::spawn({
                         let pool = pool.clone();
                         async move {
-                            log_to_db(&pool, "INFO", "Connected to orca-client").await;
+                            log_to_db(&pool, "dispatch", "INFO", "Connected to orca-client").await;
                         }
                     });
 
@@ -136,7 +144,7 @@ async fn main() {
                                         let e_clone = e.to_string();
                                         let file_path_str_clone = file_path_str.to_string();
                                         tokio::spawn(async move {
-                                            log_to_db(&pool, "ERROR", &format!("Error reading file {}: {}", file_path_str_clone, e_clone)).await;
+                                            log_to_db(&pool, "dispatch", "ERROR", &format!("Error reading file {}: {}", file_path_str_clone, e_clone)).await;
                                         });
                                     }
                                 }
@@ -144,7 +152,7 @@ async fn main() {
                                 error!("File not found or is not a file: {}", file_path_str);
                                 let pool = pool.clone();
                                 let file_path_str_clone = file_path_str.to_string();
-                                tokio::spawn(async move { log_to_db(&pool, "ERROR", &format!("File not found or is not a file: {}", file_path_str_clone)).await });
+                                tokio::spawn(async move { log_to_db(&pool, "dispatch", "ERROR", &format!("File not found or is not a file: {}", file_path_str_clone)).await });
                             }
                         }
                     }
@@ -166,7 +174,7 @@ async fn main() {
                             tokio::spawn({
                                 let pool = pool.clone();
                                 let response_clone = response.clone();
-                                async move { log_to_db(&pool, "INFO", &format!("Received: {}", response_clone)).await }
+                                async move { log_to_db(&pool, "dispatch", "INFO", &format!("Received: {}", response_clone)).await }
                             });
 
                             let epoch_time = SystemTime::now()
@@ -194,7 +202,7 @@ async fn main() {
                             error!("Failed to read from client: {}", e);
                             let pool = pool.clone();
                             let e_clone = e.to_string();
-                            tokio::spawn(async move { log_to_db(&pool, "ERROR", &format!("Failed to read from client: {}", e_clone)).await });
+                            tokio::spawn(async move { log_to_db(&pool, "dispatch", "ERROR", &format!("Failed to read from client: {}", e_clone)).await });
                         }
                     }
                 }
@@ -233,7 +241,7 @@ async fn main() {
                         let pool = pool.clone();
                         let e_clone = e.to_string();
                         let client_address_clone = client_address.clone();
-                        tokio::spawn(async move { log_to_db(&pool, "ERROR", &format!("Failed to connect to client at {}: {}", client_address_clone, e_clone)).await });
+                        tokio::spawn(async move { log_to_db(&pool, "dispatch", "ERROR", &format!("Failed to connect to client at {}: {}", client_address_clone, e_clone)).await });
                     }
                 }
             }
@@ -243,7 +251,7 @@ async fn main() {
             let pool = pool.clone();
             let e_clone = e.to_string();
             let args_client_clone = args.client.clone();
-            tokio::spawn(async move { log_to_db(&pool, "ERROR", &format!("Failed to find client '{}': {}", args_client_clone, e_clone)).await });
+            tokio::spawn(async move { log_to_db(&pool, "dispatch", "ERROR", &format!("Failed to find client '{}': {}", args_client_clone, e_clone)).await });
         }
     }
 }

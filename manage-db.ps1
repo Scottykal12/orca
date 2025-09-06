@@ -77,6 +77,8 @@ function Create-Database {
     CREATE TABLE IF NOT EXISTS logs (
         id INT AUTO_INCREMENT PRIMARY KEY,
         time BIGINT,
+        service TEXT,
+        severity TEXT,
         info TEXT
     );
 "@

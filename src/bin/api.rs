@@ -13,7 +13,7 @@ use std::str::FromStr;
 extern crate env_logger;
 
 async fn init_db(pool: &MySqlPool) -> sqlx::Result<()> {
-    sqlx::query("CREATE TABLE IF NOT EXISTS logs (id INT AUTO_INCREMENT PRIMARY KEY, time BIGINT, info TEXT)").execute(pool).await?;
+    sqlx::query("CREATE TABLE IF NOT EXISTS logs (id INT AUTO_INCREMENT PRIMARY KEY, time BIGINT, service TEXT, severity TEXT, info TEXT)").execute(pool).await?;
     Ok(())
 }
 
@@ -37,12 +37,12 @@ async fn dispatch_command(req: web::Json<DispatchRequest>, app_data: web::Data<A
 
     if dispatch_bin_path.is_empty() {
         error!("dispatch_binary_path is not set or is empty in api.json. Please set it to the path of the orca-dispatch binary.");
-        log_to_db(&db_pool, "ERROR", "dispatch_binary_path is not set or is empty in api.json.").await;
+        log_to_db(&db_pool, "api", "ERROR", "dispatch_binary_path is not set or is empty in api.json.").await;
         panic!("dispatch_binary_path is not set or is empty in api.json. Please set it to the path of the orca-dispatch binary.");
     }
 
     info!("Received dispatch command: {}", req.command);
-    log_to_db(&db_pool, "INFO", &format!("Received dispatch command: {}", req.command)).await;
+    log_to_db(&db_pool, "api", "INFO", &format!("Received dispatch command: {}", req.command)).await;
 
     let mut cmd = Command::new(dispatch_bin_path);
     cmd.arg("-c")
@@ -64,10 +64,10 @@ async fn dispatch_command(req: web::Json<DispatchRequest>, app_data: web::Data<A
 
     if !response.success {
         error!("Dispatch command failed: {}", response.stderr);
-        log_to_db(&db_pool, "ERROR", &format!("Dispatch command failed: {}", response.stderr)).await;
+        log_to_db(&db_pool, "api", "ERROR", &format!("Dispatch command failed: {}", response.stderr)).await;
     } else {
         info!("Dispatch command successful: {}", response.stdout);
-        log_to_db(&db_pool, "INFO", &format!("Dispatch command successful: {}", response.stdout)).await;
+        log_to_db(&db_pool, "api", "INFO", &format!("Dispatch command successful: {}", response.stdout)).await;
     }
 
     HttpResponse::Ok().json(response)
@@ -106,7 +106,7 @@ async fn main() -> std::io::Result<()> {
 
     if config.use_tls {
         info!("TLS is enabled with rustls. Loading certificate and key.");
-        log_to_db(&pool, "INFO", "TLS is enabled with rustls. Loading certificate and key.").await;
+        log_to_db(&pool, "api", "INFO", "TLS is enabled with rustls. Loading certificate and key.").await;
         // load TLS cert/key
         let cert_file = &mut BufReader::new(fs::File::open(&config.cert_path)?);
         let key_file = &mut BufReader::new(fs::File::open(&config.key_path)?);
@@ -124,7 +124,7 @@ async fn main() -> std::io::Result<()> {
 
         if keys.is_empty() {
             error!("could not find PKCS 8 private key in key file");
-            log_to_db(&pool, "ERROR", "could not find PKCS 8 private key in key file").await;
+            log_to_db(&pool, "api", "ERROR", "could not find PKCS 8 private key in key file").await;
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "could not find PKCS 8 private key in key file",
@@ -138,11 +138,11 @@ async fn main() -> std::io::Result<()> {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
         info!("API server listening on https://{}", listen_address);
-        log_to_db(&pool, "INFO", &format!("API server listening on https://{}", listen_address)).await;
+        log_to_db(&pool, "api", "INFO", &format!("API server listening on https://{}", listen_address)).await;
         server.bind_rustls_021(listen_address, tls_config)?.run().await
     } else {
         info!("API server listening on http://{}", listen_address);
-        log_to_db(&pool, "INFO", &format!("API server listening on http://{}", listen_address)).await;
+        log_to_db(&pool, "api", "INFO", &format!("API server listening on http://{}", listen_address)).await;
         server.bind(listen_address)?.run().await
     }
 }

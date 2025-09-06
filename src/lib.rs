@@ -34,6 +34,7 @@ pub struct DispatchConfig {
     pub use_tls: bool,
     pub cert_path: String,
     pub key_path: String,
+    pub log_level: String,
 }
 
 // Configuration for the registration server.
@@ -79,10 +80,9 @@ pub struct DispatchFileMetadata {
     pub name: String,
 }
 
-pub async fn log_to_db(pool: &MySqlPool, level: &str, message: &str) {
+pub async fn log_to_db(pool: &MySqlPool, service: &str, level: &str, message: &str) {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs() as i64;
-    let log_entry = format!("[{}] {}", level, message);
-    match sqlx::query!("INSERT INTO logs (time, info) VALUES (?, ?)", now, log_entry)
+    match sqlx::query!("INSERT INTO logs (time, service, severity, info) VALUES (?, ?, ?, ?)", now, service, level, message)
         .execute(pool)
         .await
     {

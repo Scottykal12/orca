@@ -28,7 +28,7 @@ async fn init_db(pool: &MySqlPool) -> sqlx::Result<()> {
     )
     .execute(pool)
     .await?;
-    sqlx::query("CREATE TABLE IF NOT EXISTS logs (id INT AUTO_INCREMENT PRIMARY KEY, time BIGINT, info TEXT)").execute(pool).await?;
+    sqlx::query("CREATE TABLE IF NOT EXISTS logs (id INT AUTO_INCREMENT PRIMARY KEY, time BIGINT, service TEXT, severity TEXT, info TEXT)").execute(pool).await?;
     Ok(())
 }
 
@@ -83,7 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     info!("Registration server listening on {}", config.listen_address);
-    log_to_db(&pool, "INFO", &format!("Registration server listening on {}", config.listen_address)).await;
+    log_to_db(&pool, "registration", "INFO", &format!("Registration server listening on {}", config.listen_address)).await;
 
     loop {
         let (socket, _) = listener.accept().await?;
@@ -95,12 +95,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     Ok(tls_stream) => {
                         if let Err(e) = handle_client(tls_stream, pool.clone()).await {
                             error!("Error handling client: {}", e);
-                            log_to_db(&pool, "ERROR", &format!("Error handling client: {}", e)).await;
+                            log_to_db(&pool, "registration", "ERROR", &format!("Error handling client: {}", e)).await;
                         }
                     }
                     Err(e) => {
                         error!("TLS handshake error: {}. Ensure client is using TLS.", e);
-                        log_to_db(&pool, "ERROR", &format!("TLS handshake error: {}. Ensure client is using TLS.", e)).await;
+                        log_to_db(&pool, "registration", "ERROR", &format!("TLS handshake error: {}. Ensure client is using TLS.", e)).await;
                     }
                 }
             });
@@ -109,7 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             tokio::spawn(async move {
                 if let Err(e) = handle_client(socket, pool.clone()).await {
                     error!("Error handling client: {}", e);
-                    log_to_db(&pool, "ERROR", &format!("Error handling client: {}", e)).await;
+                    log_to_db(&pool, "registration", "ERROR", &format!("Error handling client: {}", e)).await;
                 }
             });
         }
@@ -128,12 +128,12 @@ where
             }
             let received_data = String::from_utf8_lossy(&buffer[..bytes_read]);
             info!("Received from client: {}", received_data);
-            log_to_db(&pool, "INFO", &format!("Received from client: {}", received_data)).await;
+            log_to_db(&pool, "registration", "INFO", &format!("Received from client: {}", received_data)).await;
 
             match serde_json::from_str::<ClientInfo>(&received_data) {
                 Ok(client_info) => {
                     info!("Parsed ClientInfo: {:?}", client_info);
-                    log_to_db(&pool, "INFO", &format!("Parsed ClientInfo: {:?}", client_info)).await;
+                    log_to_db(&pool, "registration", "INFO", &format!("Parsed ClientInfo: {:?}", client_info)).await;
 
                     // Check if client exists
                     let client_exists = sqlx::query_as::<_, ClientInfo>(
@@ -148,7 +148,7 @@ where
                             if existing_client.mac_address == client_info.mac_address {
                                 // Same client, update IP and hostname
                                 info!("Client with UUID {} found. Updating IP and hostname.", client_info.uuid);
-                                log_to_db(&pool, "INFO", &format!("Client with UUID {} found. Updating IP and hostname.", client_info.uuid)).await;
+                                log_to_db(&pool, "registration", "INFO", &format!("Client with UUID {} found. Updating IP and hostname.", client_info.uuid)).await;
                                 sqlx::query(
                                     "UPDATE clients SET ip = ?, hostname = ? WHERE uuid = ?"
                                 )
@@ -162,7 +162,7 @@ where
                                     let e_clone = e.to_string();
                                     tokio::spawn(async move {
                                         error!("Error updating client: {:?}", e_clone);
-                                        log_to_db(&pool, "ERROR", &format!("Error updating client: {:?}", e_clone)).await;
+                                        log_to_db(&pool, "registration", "ERROR", &format!("Error updating client: {:?}", e_clone)).await;
                                     });
                                     e
                                 })?;
@@ -171,7 +171,7 @@ where
                             } else {
                                 // Different client trying to use existing UUID
                                 error!("Client with UUID {} already exists but MAC address does not match. Instructing client to get a new UUID.", client_info.uuid);
-                                log_to_db(&pool, "ERROR", &format!("Client with UUID {} already exists but MAC address does not match. Instructing client to get a new UUID.", client_info.uuid)).await;
+                                log_to_db(&pool, "registration", "ERROR", &format!("Client with UUID {} already exists but MAC address does not match. Instructing client to get a new UUID.", client_info.uuid)).await;
                                 let response = "UUID_IN_USE";
                                 stream.write_all(response.as_bytes()).await?;
                             }
@@ -179,7 +179,7 @@ where
                         Ok(None) => {
                             // Client does not exist, insert
                             info!("Client with UUID {} does not exist. Registering...", client_info.uuid);
-                            log_to_db(&pool, "INFO", &format!("Client with UUID {} does not exist. Registering...", client_info.uuid)).await;
+                            log_to_db(&pool, "registration", "INFO", &format!("Client with UUID {} does not exist. Registering...", client_info.uuid)).await;
 
                             let actual_uuid = if client_info.uuid.is_empty() || client_info.uuid == "UNREGISTERED" || client_info.uuid == "UNKNOWN_UUID" {
                                 Uuid::new_v4().to_string()
@@ -189,7 +189,7 @@ where
 
                             info!("Attempting to insert client with UUID: {}, IP: {}, Hostname: {:?}, MAC: {:?}"
                                 , actual_uuid, client_info.ip, client_info.hostname, client_info.mac_address);
-                            log_to_db(&pool, "INFO", &format!("Attempting to insert client with UUID: {}, IP: {}, Hostname: {:?}, MAC: {:?}"
+                            log_to_db(&pool, "registration", "INFO", &format!("Attempting to insert client with UUID: {}, IP: {}, Hostname: {:?}, MAC: {:?}"
                                 , actual_uuid, client_info.ip, client_info.hostname, client_info.mac_address)).await;
 
                             sqlx::query(
@@ -206,7 +206,7 @@ where
                                 let e_clone = e.to_string();
                                 tokio::spawn(async move {
                                     error!("Error inserting client: {:?}", e_clone);
-                                    log_to_db(&pool, "ERROR", &format!("Error inserting client: {:?}", e_clone)).await;
+                                    log_to_db(&pool, "registration", "ERROR", &format!("Error inserting client: {:?}", e_clone)).await;
                                 });
                                 e
                             })?;
@@ -215,7 +215,7 @@ where
                         }
                         Err(e) => {
                             error!("Database query error: {}", e);
-                            log_to_db(&pool, "ERROR", &format!("Database query error: {}", e)).await;
+                            log_to_db(&pool, "registration", "ERROR", &format!("Database query error: {}", e)).await;
                             let response = format!("Database error: {}", e);
                             stream.write_all(response.as_bytes()).await?;
                         }
@@ -223,7 +223,7 @@ where
                 }
                 Err(e) => {
                     error!("Failed to parse ClientInfo: {}", e);
-                    log_to_db(&pool, "ERROR", &format!("Failed to parse ClientInfo: {}", e)).await;
+                    log_to_db(&pool, "registration", "ERROR", &format!("Failed to parse ClientInfo: {}", e)).await;
                     let response = format!("Error parsing client info: {}", e);
                     stream.write_all(response.as_bytes()).await?;
                 }
@@ -231,7 +231,7 @@ where
         }
         Err(e) => {
             error!("Failed to read from socket: {}", e);
-            log_to_db(&pool, "ERROR", &format!("Failed to read from socket: {}", e)).await;
+            log_to_db(&pool, "registration", "ERROR", &format!("Failed to read from socket: {}", e)).await;
             return Err(e.into());
         }
     }
