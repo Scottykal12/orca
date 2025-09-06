@@ -72,6 +72,22 @@ function Create-Database {
         return
     }
 
+    # Create logs table
+    $sqlLogs = @"
+    CREATE TABLE IF NOT EXISTS logs (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        time BIGINT,
+        info TEXT
+    );
+"@
+    try {
+        & $mysql $connArgs $DbName -e $sqlLogs
+        Write-Host "Table 'logs' created successfully."
+    } catch {
+        Write-Error "Error creating 'logs' table: $($_.Exception.Message)"
+        return
+    }
+
     Write-Host "Database '$DbName' and tables created successfully."
 }
 
