@@ -13,7 +13,7 @@ use std::str::FromStr;
 extern crate env_logger;
 
 async fn init_db(pool: &MySqlPool) -> sqlx::Result<()> {
-    sqlx::query("CREATE TABLE IF NOT EXISTS logs (time BIGINT, info TEXT)").execute(pool).await?;
+    sqlx::query("CREATE TABLE IF NOT EXISTS logs (id INT AUTO_INCREMENT PRIMARY KEY, time BIGINT, info TEXT)").execute(pool).await?;
     Ok(())
 }
 
@@ -89,7 +89,7 @@ async fn main() -> std::io::Result<()> {
     // Create database pool
     let pool = MySqlPool::connect(&config.database_url).await.expect("Failed to connect to database");
     init_db(&pool).await.expect("Failed to initialize database");
-    let db_pool = web::Data::new(pool);
+    let db_pool = web::Data::new(pool.clone());
 
     let server = HttpServer::new(move || {
         let cors = Cors::default()
@@ -106,6 +106,7 @@ async fn main() -> std::io::Result<()> {
 
     if config.use_tls {
         info!("TLS is enabled with rustls. Loading certificate and key.");
+        log_to_db(&pool, "INFO", "TLS is enabled with rustls. Loading certificate and key.").await;
         // load TLS cert/key
         let cert_file = &mut BufReader::new(fs::File::open(&config.cert_path)?);
         let key_file = &mut BufReader::new(fs::File::open(&config.key_path)?);
@@ -123,6 +124,7 @@ async fn main() -> std::io::Result<()> {
 
         if keys.is_empty() {
             error!("could not find PKCS 8 private key in key file");
+            log_to_db(&pool, "ERROR", "could not find PKCS 8 private key in key file").await;
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "could not find PKCS 8 private key in key file",
@@ -136,9 +138,11 @@ async fn main() -> std::io::Result<()> {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
         info!("API server listening on https://{}", listen_address);
+        log_to_db(&pool, "INFO", &format!("API server listening on https://{}", listen_address)).await;
         server.bind_rustls_021(listen_address, tls_config)?.run().await
     } else {
         info!("API server listening on http://{}", listen_address);
+        log_to_db(&pool, "INFO", &format!("API server listening on http://{}", listen_address)).await;
         server.bind(listen_address)?.run().await
     }
 }

@@ -107,89 +107,95 @@ async fn main() {
             info!("Connecting to client at {}", client_address);
             log_to_db(&pool, "INFO", &format!("Connecting to client at {}", client_address)).await;
 
-            let pool_clone = pool.clone();
-            let handle_connection = |mut stream: Box<dyn ReadWrite + Unpin + Send>| async move {
-                info!("Connected to orca-client");
-                let pool_clone_inner = pool_clone.clone();
-                tokio::spawn(async move {
-                    log_to_db(&pool_clone_inner, "INFO", "Connected to orca-client").await;
-                });
+            let handle_connection = |mut stream: Box<dyn ReadWrite + Unpin + Send>| {
+                let pool = pool.clone();
+                async move {
+                    info!("Connected to orca-client");
+                    tokio::spawn({
+                        let pool = pool.clone();
+                        async move {
+                            log_to_db(&pool, "INFO", "Connected to orca-client").await;
+                        }
+                    });
 
-                let mut files_to_send: Vec<DispatchFile> = Vec::new();
-                if let Some(files_arg) = args.files.clone() {
-                    for file_path_str in files_arg.split(',') {
-                        let file_path = Path::new(file_path_str.trim());
-                        if file_path.exists() && file_path.is_file() {
-                            match fs::read(file_path) {
-                                Ok(content) => {
-                                    files_to_send.push(DispatchFile {
-                                        name: file_path.file_name().unwrap().to_string_lossy().into_owned(),
-                                        content,
-                                    });
-                                },
-                                Err(e) => {
-                                    error!("Error reading file {}: {}", file_path_str, e);
-                                    let pool_clone_inner = pool_clone.clone();
-                                    let e_clone = e.to_string();
-                                    let file_path_str_clone = file_path_str.to_string();
-                                    tokio::spawn(async move {
-                                        log_to_db(&pool_clone_inner, "ERROR", &format!("Error reading file {}: {}", file_path_str_clone, e_clone)).await;
-                                    });
+                    let mut files_to_send: Vec<DispatchFile> = Vec::new();
+                    if let Some(files_arg) = args.files.clone() {
+                        for file_path_str in files_arg.split(',') {
+                            let file_path = Path::new(file_path_str.trim());
+                            if file_path.exists() && file_path.is_file() {
+                                match fs::read(file_path) {
+                                    Ok(content) => {
+                                        files_to_send.push(DispatchFile {
+                                            name: file_path.file_name().unwrap().to_string_lossy().into_owned(),
+                                            content,
+                                        });
+                                    },
+                                    Err(e) => {
+                                        error!("Error reading file {}: {}", file_path_str, e);
+                                        let pool = pool.clone();
+                                        let e_clone = e.to_string();
+                                        let file_path_str_clone = file_path_str.to_string();
+                                        tokio::spawn(async move {
+                                            log_to_db(&pool, "ERROR", &format!("Error reading file {}: {}", file_path_str_clone, e_clone)).await;
+                                        });
+                                    }
                                 }
+                            } else {
+                                error!("File not found or is not a file: {}", file_path_str);
+                                let pool = pool.clone();
+                                let file_path_str_clone = file_path_str.to_string();
+                                tokio::spawn(async move { log_to_db(&pool, "ERROR", &format!("File not found or is not a file: {}", file_path_str_clone)).await });
                             }
-                        } else {
-                            error!("File not found or is not a file: {}", file_path_str);
-                            let pool_clone_inner = pool_clone.clone();
-                            let file_path_str_clone = file_path_str.to_string();
-                            tokio::spawn(async move { log_to_db(&pool_clone_inner, "ERROR", &format!("File not found or is not a file: {}", file_path_str_clone)).await });
                         }
                     }
-                }
 
-                let dispatch_message = DispatchMessage {
-                    command: args.command.clone(),
-                    files: files_to_send,
-                };
+                    let dispatch_message = DispatchMessage {
+                        command: args.command.clone(),
+                        files: files_to_send,
+                    };
 
-                let serialized_message = serde_json::to_string(&dispatch_message).unwrap();
-                stream.write_all(serialized_message.as_bytes()).await.unwrap();
-                stream.write_all(b"\n").await.unwrap();
+                    let serialized_message = serde_json::to_string(&dispatch_message).unwrap();
+                    stream.write_all(serialized_message.as_bytes()).await.unwrap();
+                    stream.write_all(b"\n").await.unwrap();
 
-                let mut buffer = vec![0; 1024];
-                match stream.read(&mut buffer).await {
-                    Ok(bytes_read) => {
-                        let response = String::from_utf8_lossy(&buffer[..bytes_read]).to_string();
-                        info!("Received: {}", response);
-                        let pool_clone_inner = pool_clone.clone();
-                        let response_clone = response.clone();
-                        tokio::spawn(async move { log_to_db(&pool_clone_inner, "INFO", &format!("Received: {}", response_clone)).await });
+                    let mut buffer = vec![0; 1024];
+                    match stream.read(&mut buffer).await {
+                        Ok(bytes_read) => {
+                            let response = String::from_utf8_lossy(&buffer[..bytes_read]).to_string();
+                            info!("Received: {}", response);
+                            tokio::spawn({
+                                let pool = pool.clone();
+                                let response_clone = response.clone();
+                                async move { log_to_db(&pool, "INFO", &format!("Received: {}", response_clone)).await }
+                            });
 
-                        let epoch_time = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs();
+                            let epoch_time = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs();
 
-                        let files_metadata: Vec<DispatchFileMetadata> = dispatch_message.files.iter().map(|f| DispatchFileMetadata { name: f.name.clone() }).collect();
-                        let files_json = serde_json::to_string(&files_metadata).unwrap_or_else(|_| "[]".to_string());
+                            let files_metadata: Vec<DispatchFileMetadata> = dispatch_message.files.iter().map(|f| DispatchFileMetadata { name: f.name.clone() }).collect();
+                            let files_json = serde_json::to_string(&files_metadata).unwrap_or_else(|_| "[]".to_string());
 
-                        sqlx::query(
-                            "INSERT INTO events (epoch_time, client_uuid, client_ip, command, response, files) VALUES (?, ?, ?, ?, ?, ?)",
-                        )
-                        .bind(&(epoch_time as i64))
-                        .bind(&client.uuid)
-                        .bind(&client.ip)
-                        .bind(&dispatch_message.command)
-                        .bind(&response)
-                        .bind(&files_json)
-                        .execute(&pool_clone)
-                        .await
-                        .unwrap();
-                    } 
-                    Err(e) => {
-                        error!("Failed to read from client: {}", e);
-                        let pool_clone_inner = pool_clone.clone();
-                        let e_clone = e.to_string();
-                        tokio::spawn(async move { log_to_db(&pool_clone_inner, "ERROR", &format!("Failed to read from client: {}", e_clone)).await });
+                            sqlx::query(
+                                "INSERT INTO events (epoch_time, client_uuid, client_ip, command, response, files) VALUES (?, ?, ?, ?, ?, ?)",
+                            )
+                            .bind(&(epoch_time as i64))
+                            .bind(&client.uuid)
+                            .bind(&client.ip)
+                            .bind(&dispatch_message.command)
+                            .bind(&response)
+                            .bind(&files_json)
+                            .execute(&pool)
+                            .await
+                            .unwrap();
+                        }
+                        Err(e) => {
+                            error!("Failed to read from client: {}", e);
+                            let pool = pool.clone();
+                            let e_clone = e.to_string();
+                            tokio::spawn(async move { log_to_db(&pool, "ERROR", &format!("Failed to read from client: {}", e_clone)).await });
+                        }
                     }
                 }
             };
@@ -218,27 +224,26 @@ async fn main() {
                 let stream = connector.connect(domain, stream).await.unwrap();
                 handle_connection(Box::new(stream)).await;
             } else {
-                let _pool_clone = pool.clone();
                 match TokioTcpStream::connect(&client_address).await {
                     Ok(stream) => {
                         handle_connection(Box::new(stream)).await;
                     }
                     Err(e) => {
                         error!("Failed to connect to client at {}: {}", client_address, e);
-                        let pool_clone_inner = pool.clone();
+                        let pool = pool.clone();
                         let e_clone = e.to_string();
                         let client_address_clone = client_address.clone();
-                        tokio::spawn(async move { log_to_db(&pool_clone_inner, "ERROR", &format!("Failed to connect to client at {}: {}", client_address_clone, e_clone)).await });
+                        tokio::spawn(async move { log_to_db(&pool, "ERROR", &format!("Failed to connect to client at {}: {}", client_address_clone, e_clone)).await });
                     }
                 }
             }
         }
         Err(e) => {
             error!("Failed to find client '{}': {}", args.client, e);
-            let pool_clone = pool.clone();
+            let pool = pool.clone();
             let e_clone = e.to_string();
             let args_client_clone = args.client.clone();
-            tokio::spawn(async move { log_to_db(&pool_clone, "ERROR", &format!("Failed to find client '{}': {}", args_client_clone, e_clone)).await });
+            tokio::spawn(async move { log_to_db(&pool, "ERROR", &format!("Failed to find client '{}': {}", args_client_clone, e_clone)).await });
         }
     }
 }

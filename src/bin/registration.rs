@@ -87,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     loop {
         let (socket, _) = listener.accept().await?;
-        
+
         if let Some(acceptor) = acceptor.clone() {
             let pool = pool.clone();
             tokio::spawn(async move {

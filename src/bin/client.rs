@@ -2,9 +2,9 @@
 // It first registers with the registration server, then listens for commands from the dispatch server.
 
 use std::env;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::net::{TcpListener, TcpStream};
-use std::io::{Read, Write, BufReader, BufRead};
+use std::io::{self, Read, Write, BufReader, BufRead};
 use std::process::{Command, Output, exit};
 use std::path::PathBuf;
 use orca::{ClientInfo, ClientConfig, DispatchMessage};
@@ -19,6 +19,21 @@ use std::sync::Arc;
 use rustls::{ClientConfig as RustlsClientConfig, ServerConfig as RustlsServerConfig, ServerName};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use rustls_native_certs::load_native_certs;
+
+struct Tee(io::Stderr, File);
+
+impl Write for Tee {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.write_all(buf)?;
+        self.1.write_all(buf)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()?;
+        self.1.flush()
+    }
+}
 
 // This function executes the command in a cross-platform way.
 fn execute_command(command_str: &str, config: &ClientConfig) -> std::io::Result<Output> {
@@ -193,7 +208,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config: ClientConfig = serde_json::from_str(&config_str)?;
 
     let log_level = LevelFilter::from_str(&config.log_level).unwrap_or(LevelFilter::Info);
-    env_logger::builder().filter_level(log_level).init();
+    let log_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(true)
+        .open(&config.log_file_path)?;
+
+    let target = Box::new(Tee(io::stderr(), log_file));
+
+    env_logger::builder()
+        .filter_level(log_level)
+        .target(env_logger::Target::Pipe(target))
+        .init();
 
     if let Err(e) = do_registration(&config).await {
         error!("Failed to register with server: {}. Please check TLS configuration and server address.", e);
@@ -261,3 +287,4 @@ async fn main() {
         exit(1);
     }
 }
+
