@@ -169,8 +169,10 @@ async fn main() {
                     let mut buffer = vec![0; 1024];
                     match stream.read(&mut buffer).await {
                         Ok(bytes_read) => {
-                            let response = String::from_utf8_lossy(&buffer[..bytes_read]).to_string();
+                                                        let response = String::from_utf8_lossy(&buffer[..bytes_read]).to_string();
                             info!("Received: {}", response);
+                            // Print the response to stdout so orca-api can capture it
+                            println!("{}", response);
                             tokio::spawn({
                                 let pool = pool.clone();
                                 let response_clone = response.clone();

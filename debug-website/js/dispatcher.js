@@ -16,8 +16,10 @@ document.getElementById('dispatch-form').addEventListener('submit', async functi
     responseContainer.style.display = 'none';
 
     try {
+                const useTls = document.getElementById('use-tls').checked;
+        const protocol = useTls ? 'https' : 'http';
         // The default port for the api is 8082, as seen in the api.md
-        const response = await fetch('http://127.0.0.1:8082/dispatch', {
+        const response = await fetch(`${protocol}://127.0.0.1:8082/dispatch`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'

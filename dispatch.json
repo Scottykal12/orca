@@ -4,5 +4,5 @@
   "use_tls": true,
   "cert_path": "dispatch.pem",
   "key_path": "dispatch-key.pem",
-  "log_level": "info"
+  "log_level": "warn"
 }

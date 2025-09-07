@@ -36,9 +36,14 @@ async fn dispatch_command(req: web::Json<DispatchRequest>, app_data: web::Data<A
     let dispatch_bin_path = app_data.dispatch_binary_path.as_ref().cloned().unwrap_or_default();
 
     if dispatch_bin_path.is_empty() {
-        error!("dispatch_binary_path is not set or is empty in api.json. Please set it to the path of the orca-dispatch binary.");
-        log_to_db(&db_pool, "api", "ERROR", "dispatch_binary_path is not set or is empty in api.json.").await;
-        panic!("dispatch_binary_path is not set or is empty in api.json. Please set it to the path of the orca-dispatch binary.");
+        let error_msg = "dispatch_binary_path is not set or is empty in api.json. Please set it to the path of the orca-dispatch binary.";
+        error!("{}", error_msg);
+        log_to_db(&db_pool, "api", "ERROR", error_msg).await;
+        return HttpResponse::InternalServerError().json(DispatchResponse {
+            stdout: "".to_string(),
+            stderr: error_msg.to_string(),
+            success: false,
+        });
     }
 
     info!("Received dispatch command: {}", req.command);
@@ -54,7 +59,19 @@ async fn dispatch_command(req: web::Json<DispatchRequest>, app_data: web::Data<A
         cmd.arg("--files").arg(files.clone());
     }
 
-    let output = cmd.output().expect("Failed to execute orca-dispatch");
+    let output = match cmd.output() {
+        Ok(output) => output,
+        Err(e) => {
+            let error_msg = format!("Failed to execute orca-dispatch: {}", e);
+            error!("{}", error_msg);
+            log_to_db(&db_pool, "api", "ERROR", &error_msg).await;
+            return HttpResponse::InternalServerError().json(DispatchResponse {
+                stdout: "".to_string(),
+                stderr: error_msg.to_string(),
+                success: false,
+            });
+        }
+    };
 
     let response = DispatchResponse {
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
