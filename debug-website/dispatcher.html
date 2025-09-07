@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Orca Dispatcher</title>
     <link rel="stylesheet" href="css/dispatcher.css">
+    <link rel="icon" href="../images/logo.svg" type="image/svg+xml">
 </head>
 <body>
     <div class="header">
@@ -20,8 +21,8 @@
     <div class="container">
         <form id="dispatch-form">
             <div class="form-group">
-                <label for="client">Client IP</label>
-                <input type="text" id="client" name="client" required>
+                <label for="client-table">Clients</label>
+                <div id="client-table-container" class="table-container"></div>
             </div>
             <div class="form-group">
                 <label for="command">Command</label>
@@ -32,7 +33,7 @@
                 <input type="text" id="files" name="files">
             </div>
             <div class="form-group checkbox-group">
-                <input type="checkbox" id="use-tls" name="use-tls">
+                <input type="checkbox" id="use-tls" name="use-tls" checked>
                 <label for="use-tls">Use TLS (HTTPS)</label>
             </div>
             <button type="submit">Dispatch</button>
@@ -40,11 +41,7 @@
 
         <div id="response-container" class="response" style="display: none;">
             <h2>Response</h2>
-            <p><strong>Success:</strong> <span id="success"></span></p>
-            <h3>Stdout</h3>
-            <pre id="stdout" class="stdout"></pre>
-            <h3>Stderr</h3>
-            <pre id="stderr" class="stderr"></pre>
+            <div id="multi-response-container"></div>
         </div>
     </div>
 

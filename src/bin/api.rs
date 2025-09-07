@@ -1,5 +1,5 @@
 use actix_cors::Cors;
-use actix_web::{post, web, App, HttpResponse, HttpServer, Responder};
+use actix_web::{get, post, put, web, App, HttpResponse, HttpServer, Responder};
 use orca::{ApiConfig, log_to_db};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -8,9 +8,11 @@ use rustls::{ServerConfig, Certificate, PrivateKey};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use std::io::BufReader;
 use log::{info, error, LevelFilter};
-use sqlx::mysql::MySqlPool;
+use sqlx::mysql::{MySqlPool, MySqlRow};
 use std::str::FromStr;
 extern crate env_logger;
+use sqlx::{Column, Row, TypeInfo, ValueRef};
+use serde_json::{json, Value};
 
 async fn init_db(pool: &MySqlPool) -> sqlx::Result<()> {
     sqlx::query("CREATE TABLE IF NOT EXISTS logs (id INT AUTO_INCREMENT PRIMARY KEY, time BIGINT, service TEXT, severity TEXT, info TEXT)").execute(pool).await?;
@@ -29,6 +31,12 @@ struct DispatchResponse {
     stdout: String,
     stderr: String,
     success: bool,
+}
+
+#[derive(Deserialize)]
+struct UpdateQuery {
+    pk_col: String,
+    pk_val: String,
 }
 
 #[post("/dispatch")]
@@ -90,6 +98,196 @@ async fn dispatch_command(req: web::Json<DispatchRequest>, app_data: web::Data<A
     HttpResponse::Ok().json(response)
 }
 
+#[get("/db/{table_name}")]
+async fn get_table(
+    db_pool: web::Data<MySqlPool>,
+    table_name: web::Path<String>,
+) -> impl Responder {
+    let table = table_name.into_inner();
+    if !table.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return HttpResponse::BadRequest().body("Invalid table name");
+    }
+
+    let query = format!("SELECT * FROM {}", table);
+    let rows: Result<Vec<MySqlRow>, sqlx::Error> = sqlx::query(&query).fetch_all(&**db_pool).await;
+
+    match rows {
+        Ok(rows) => {
+            let results: Vec<Value> = rows
+                .iter()
+                .map(|row| {
+                    let mut map = serde_json::Map::new();
+                    for col in row.columns() {
+                        let key = col.name().to_string();
+                        let value: Value = match row.try_get_raw(col.ordinal()) {
+                            Ok(raw_value) if !raw_value.is_null() => {
+                                match col.type_info().name() {
+                                    "TEXT" | "VARCHAR" | "CHAR" => json!(row.get::<String, &str>(col.name())),
+                                    "INT" | "BIGINT" => json!(row.get::<i64, &str>(col.name())),
+                                    "BOOLEAN" => json!(row.get::<bool, &str>(col.name())),
+                                    _ => json!(row.get::<String, &str>(col.name())),
+                                }
+                            }
+                            _ => Value::Null,
+                        };
+                        map.insert(key, value);
+                    }
+                    Value::Object(map)
+                })
+                .collect();
+            HttpResponse::Ok().json(results)
+        }
+        Err(e) => {
+            error!("Failed to fetch from table {}: {}", table, e);
+            HttpResponse::InternalServerError().body(format!("Failed to fetch from table {}: {}", table, e))
+        }
+    }
+}
+
+#[post("/db/{table_name}")]
+async fn insert_table(
+    db_pool: web::Data<MySqlPool>,
+    table_name: web::Path<String>,
+    body: web::Json<Vec<Value>>,
+) -> impl Responder {
+    let table = table_name.into_inner();
+    if !table.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return HttpResponse::BadRequest().body("Invalid table name");
+    }
+
+    let mut transaction = match db_pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            error!("Failed to begin transaction: {}", e);
+            return HttpResponse::InternalServerError().body("Failed to begin transaction");
+        }
+    };
+
+    for item in body.iter() {
+        if let Value::Object(map) = item {
+            let columns: Vec<String> = map.keys().map(|k| k.to_string()).collect();
+            let placeholders: Vec<&str> = columns.iter().map(|_| "?").collect();
+            let query_str = format!(
+                "INSERT INTO {} ({}) VALUES ({})",
+                table,
+                columns.join(", "),
+                placeholders.join(", ")
+            );
+
+            let mut q = sqlx::query(&query_str);
+            for key in &columns {
+                q = match map.get(key).unwrap() {
+                    Value::String(s) => q.bind(s),
+                    Value::Number(n) => {
+                        if n.is_f64() {
+                            q.bind(n.as_f64().unwrap())
+                        } else if n.is_i64() {
+                            q.bind(n.as_i64().unwrap())
+                        } else {
+                            q.bind(n.as_u64().unwrap())
+                        }
+                    }
+                    Value::Bool(b) => q.bind(b),
+                    Value::Null => q.bind(None::<String>), // Assuming NULL for null values
+                    _ => {
+                        // Unsupported type
+                        let _ = transaction.rollback().await;
+                        return HttpResponse::BadRequest().body("Unsupported data type in JSON");
+                    }
+                };
+            }
+
+            if let Err(e) = q.execute(&mut *transaction).await {
+                error!("Failed to insert into table {}: {}", table, e);
+                let _ = transaction.rollback().await;
+                return HttpResponse::InternalServerError().body(format!("Failed to insert into table {}: {}", table, e));
+            }
+        } else {
+            let _ = transaction.rollback().await;
+            return HttpResponse::BadRequest().body("Invalid data format, expected an array of objects.");
+        }
+    }
+
+    if let Err(e) = transaction.commit().await {
+        error!("Failed to commit transaction: {}", e);
+        return HttpResponse::InternalServerError().body("Failed to commit transaction");
+    }
+
+    HttpResponse::Ok().body("Data inserted successfully")
+}
+
+#[put("/db/{table_name}")]
+async fn update_table(
+    db_pool: web::Data<MySqlPool>,
+    table_name: web::Path<String>,
+    query: web::Query<UpdateQuery>,
+    body: web::Json<Value>,
+) -> impl Responder {
+    let table = table_name.into_inner();
+    if !table.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return HttpResponse::BadRequest().body("Invalid table name");
+    }
+
+    if !query.pk_col.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return HttpResponse::BadRequest().body("Invalid primary key column name");
+    }
+
+    if let Value::Object(map) = body.into_inner() {
+        let set_clause: Vec<String> = map
+            .keys()
+            .map(|k| format!("`{}` = ?", k))
+            .collect();
+
+        let query_str = format!(
+            "UPDATE `{}` SET {} WHERE `{}` = ?",
+            table,
+            set_clause.join(", "),
+            query.pk_col
+        );
+
+        let mut q = sqlx::query(&query_str);
+        for key in map.keys() {
+            q = match map.get(key).unwrap() {
+                Value::String(s) => q.bind(s),
+                Value::Number(n) => {
+                    if n.is_f64() {
+                        q.bind(n.as_f64().unwrap())
+                    } else if n.is_i64() {
+                        q.bind(n.as_i64().unwrap())
+                    } else {
+                        q.bind(n.as_u64().unwrap())
+                    }
+                }
+                Value::Bool(b) => q.bind(b),
+                Value::Null => q.bind(None::<String>),
+                _ => {
+                    return HttpResponse::BadRequest().body("Unsupported data type in JSON");
+                }
+            };
+        }
+
+        q = q.bind(&query.pk_val);
+
+        match q.execute(&**db_pool).await {
+            Ok(result) => {
+                if result.rows_affected() > 0 {
+                    HttpResponse::Ok().body("Row updated successfully")
+                } else {
+                    HttpResponse::NotFound().body("Row not found")
+                }
+            }
+            Err(e) => {
+                error!("Failed to update table {}: {}", table, e);
+                HttpResponse::InternalServerError()
+                    .body(format!("Failed to update table {}: {}", table, e))
+            }
+        }
+    } else {
+        HttpResponse::BadRequest().body("Invalid data format, expected an object.")
+    }
+}
+
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     // Read the API configuration.
@@ -119,6 +317,9 @@ async fn main() -> std::io::Result<()> {
             .app_data(app_data.clone())
             .app_data(db_pool.clone())
             .service(dispatch_command)
+            .service(get_table)
+            .service(insert_table)
+            .service(update_table)
     });
 
     if config.use_tls {
