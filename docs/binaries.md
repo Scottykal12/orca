@@ -38,13 +38,29 @@ The `orca-api` server is configured via the `api.json` file located in the proje
 
 ```json
 {
+  "database_url": "mysql://root:password@localhost:3306/orca",
   "listen_address": "127.0.0.1:8082",
-  "dispatch_binary_path": "target/debug/orca-dispatch" // Path to the orca-dispatch executable
+  "dispatch_binary_path": "c:\\Users\\scott\\Projects\\orca\\target\\debug\\orca-dispatch.exe",
+  "use_tls": true,
+  "cert_path": "localhost.pem",
+  "key_path": "localhost-key.pem",
+  "log_level": "info"
 }
 ```
 
-*   `listen_address`: The IP address and port on which the API server will listen for incoming requests.
+*   `database_url`: The connection string for the MySQL database, used for storing and retrieving data.
+*   `listen_address`: The IP address and port on which the registration server will listen for client registrations.
+*   `create_db_if_not_exists`: (`true`/`false`) If set to `true`, the database specified in `database_url` will be created if it does not already exist.
+*   `use_tls`: (`true`/`false`) Whether to enable TLS for secure communication with clients. If `true`, `cert_path` and `key_path` are required.
+*   `cert_path`: Path to the TLS certificate file (in PEM format) for the registration server. Required if `use_tls` is `true`.
+*   `key_path`: Path to the private key file (in PEM format) for the registration server's certificate. Required if `use_tls` is `true`.
+*   `log_level`: The minimum log level to record (e.g., "info", "debug", "error", "warn", "trace").
+
 *   `dispatch_binary_path`: The absolute or relative path to the `orca-dispatch` executable. This is used by the API server to spawn `orca-dispatch` as a subprocess.
+*   `use_tls`: (`true`/`false`) Whether to enable TLS for secure communication. If `true`, `cert_path` and `key_path` are required.
+*   `cert_path`: Path to the TLS certificate file (in PEM format) for the API server. Required if `use_tls` is `true`.
+*   `key_path`: Path to the private key file (in PEM format) for the API server's certificate. Required if `use_tls` is `true`.
+*   `log_level`: The minimum log level to record (e.g., "info", "debug", "error", "warn", "trace").
 
 ### Endpoints
 
@@ -123,6 +139,7 @@ The `orca-client` is configured via the `client.json` file located in the projec
 *   `log_file_path`: The path to the client's log file.
 *   `log_level`: The minimum log level to record (e.g., "info", "debug", "error").
 *   `workspace_dir` (optional): The directory where dispatched files will be saved and commands will be executed. If not specified, a directory named `orca-workspace` will be created next to the `orca-client` executable.
+*   `database_url`: The connection string for the MySQL database, used for storing and retrieving client-specific data.
 
 ### Functionality
 
@@ -160,6 +177,7 @@ The `orca-dispatch` tool is configured via the `dispatch.json` file in the proje
 *   `use_tls`: (`true`/`false`) Whether to connect to clients using Mutual TLS (mTLS). If `true`, `cert_path` and `key_path` are required.
 *   `cert_path`: Path to the TLS client certificate file (in PEM format) that the dispatcher will present to clients. Required if `use_tls` is `true`.
 *   `key_path`: Path to the private key file (in PEM format) for the certificate. Required if `use_tls` is `true`.
+*   `log_level`: The minimum log level to record (e.g., "info", "debug", "error", "warn", "trace").
 
 ### Arguments
 
