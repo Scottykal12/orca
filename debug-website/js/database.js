@@ -1,4 +1,3 @@
-
 document.addEventListener('DOMContentLoaded', () => {
     // State variables
     let fullData = [];
@@ -8,6 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Form elements
     const getTableForm = document.getElementById('get-table-form');
     const insertTableForm = document.getElementById('insert-table-form');
+    const useTlsCheckbox = document.getElementById('use-tls');
 
     // Response and table containers
     const getResponseContainer = document.getElementById('get-response-container');
@@ -26,6 +26,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const pageInfo = document.getElementById('page-info');
     const rowsPerPageSelect = document.getElementById('rows-per-page-select');
 
+    // Tab elements
+    const tabContainer = document.querySelector('.tabs');
+
     // Event Listeners
     getTableForm.addEventListener('submit', handleGetTable);
     insertTableForm.addEventListener('submit', handleInsertData);
@@ -36,6 +39,22 @@ document.addEventListener('DOMContentLoaded', () => {
         rowsPerPage = parseInt(e.target.value, 10);
         changePage(1);
     });
+
+    if (tabContainer) {
+        tabContainer.addEventListener('click', (e) => {
+            if (e.target.classList.contains('tab-link')) {
+                const tabLinks = tabContainer.querySelectorAll('.tab-link');
+                const tabContents = tabContainer.querySelectorAll('.tab-content');
+                const tabId = e.target.dataset.tab;
+
+                tabLinks.forEach(link => link.classList.remove('active'));
+                tabContents.forEach(content => content.classList.remove('active'));
+
+                e.target.classList.add('active');
+                document.getElementById(tabId).classList.add('active');
+            }
+        });
+    }
 
 
     async function handleGetTable(event) {
@@ -48,8 +67,7 @@ document.addEventListener('DOMContentLoaded', () => {
         paginationContainer.style.display = 'none';
 
         try {
-            const useTls = document.getElementById('use-tls').checked;
-            const protocol = useTls ? 'https' : 'http';
+            const protocol = useTlsCheckbox.checked ? 'https' : 'http';
             const response = await fetch(`${protocol}://127.0.0.1:8082/db/${tableName}`);
 
             if (!response.ok) {
@@ -82,8 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
         insertErrorEl.textContent = '';
 
         try {
-            const useTls = document.getElementById('use-tls').checked;
-            const protocol = useTls ? 'https' : 'http';
+            const protocol = useTlsCheckbox.checked ? 'https' : 'http';
             const response = await fetch(`${protocol}://127.0.0.1:8082/db/${tableName}`, {
                 method: 'POST',
                 headers: {
@@ -205,8 +222,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
 
             try {
-                const useTls = document.getElementById('use-tls').checked;
-                const protocol = useTls ? 'https' : 'http';
+                const protocol = useTlsCheckbox.checked ? 'https' : 'http';
                 const response = await fetch(`${protocol}://127.0.0.1:8082/db/${tableName}?pk_col=${pkColumn}&pk_val=${pkValue}`, {
                     method: 'PUT',
                     headers: {
